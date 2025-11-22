@@ -7,7 +7,11 @@ Files added:
 - `roster_sample.csv` - example roster CSV
 - `requirements.txt` - Python dependency list
 
-CSV format (header): `id,name,available,experience,preferred_positions`
+CSV format (header): `id,name,available,experience,preferred_positions,secondary_positions`
+	- `available`: 1 or 0
+	- `experience`: integer 1..5 (1 = beginner, 5 = advanced)
+	- `preferred_positions`: semicolon-separated positions like `LW;C` (positions: `LW`,`C`,`RW`,`LD`,`RD`)
+	- `secondary_positions`: semicolon-separated positions a player will play if needed (lower priority)
 - `available`: 1 or 0
 - `experience`: integer 1..3
 - `preferred_positions`: semicolon-separated positions like `LW;C` (positions: `LW`,`C`,`RW`,`LD`,`RD`)
@@ -28,4 +32,5 @@ Options:
 
 Notes:
 - The objective maximizes number of assigned players first, then preference satisfaction, then minimizes forward-line experience imbalance (L1 norm).
+- Output now annotates assignments as `primary` (player's primary position), `secondary` (player's secondary position), or `OOP` (out-of-position when `--allow-oop` is used).
 - This is an initial implementation — I can add lexicographic solving, bench slots, goalie handling, handedness constraints, or special-teams assignment next.
