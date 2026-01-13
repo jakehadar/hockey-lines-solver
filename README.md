@@ -33,4 +33,3 @@ Options:
 Notes:
 - The objective maximizes number of assigned players first, then preference satisfaction, then minimizes forward-line experience imbalance (L1 norm).
 - Output now annotates assignments as `primary` (player's primary position), `secondary` (player's secondary position), or `OOP` (out-of-position when `--allow-oop` is used).
-- This is an initial implementation — I can add lexicographic solving, bench slots, goalie handling, handedness constraints, or special-teams assignment next.
