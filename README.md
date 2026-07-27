@@ -13,7 +13,7 @@ CSV format (header): `id,name,available,experience,preferred_positions,secondary
 	- `preferred_positions`: semicolon-separated positions like `LW;C` (positions: `LW`,`C`,`RW`,`LD`,`RD`)
 	- `secondary_positions`: semicolon-separated positions a player will play if needed (lower priority)
 - `available`: 1 or 0
-- `experience`: integer 1..3
+- `experience`: integer 1..5
 - `preferred_positions`: semicolon-separated positions like `LW;C` (positions: `LW`,`C`,`RW`,`LD`,`RD`)
 
 Quick start (macOS, using provided venv at `./venv`):
