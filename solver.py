@@ -8,7 +8,7 @@ Usage:
 
 CSV format (header): id,name,available,experience,preferred_positions,secondary_positions
     - `available` is 1 or 0
-    - `experience` integer 1..3
+    - `experience` integer 1..5
     - `preferred_positions` is semicolon-separated, e.g. "LW;C"
     - `secondary_positions` is semicolon-separated positions a player will play if needed
 
@@ -16,17 +16,20 @@ This script builds a CP-SAT model that:
   - assigns players to forward and defense slots
   - enforces availability and unique assignment
   - favors preferred positions and balances experience across forward lines
+
+`solve_lines()` is the reusable core (no I/O) and also backs the FastAPI
+service in api.py; `read_roster()`/`players_from_rows()` are shared CSV
+parsing helpers used by both the CLI and the API's file-upload endpoint.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
-import math
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, Iterable, List, Tuple
 
 try:
     from ortools.sat.python import cp_model
@@ -34,6 +37,14 @@ except Exception as e:
     print("Error importing OR-Tools:", e)
     print("Please install with: pip install ortools")
     sys.exit(1)
+
+from schemas import (
+    DefensePair,
+    ForwardLine,
+    SlotAssignment,
+    SolveResponse,
+    SolveSummary,
+)
 
 
 @dataclass
@@ -46,24 +57,28 @@ class Player:
     secondary: List[str]
 
 
-def read_roster(path: str) -> List[Player]:
+def players_from_rows(rows: Iterable[dict]) -> List[Player]:
     players: List[Player] = []
+    for r in rows:
+        pid = (r.get("id") or r.get("name") or "").strip()
+        # skip empty rows
+        if not pid:
+            continue
+        name = r.get("name") or pid
+        avail = int(r.get("available", "1"))
+        exp = int(r.get("experience", "1"))
+        prefs_raw = r.get("preferred_positions", "")
+        prefs = [p.strip().upper() for p in prefs_raw.replace("|", ";").split(";") if p.strip()]
+        sec_raw = r.get("secondary_positions", "")
+        secondary = [p.strip().upper() for p in sec_raw.replace("|", ";").split(";") if p.strip()]
+        players.append(Player(pid, name, avail, exp, prefs, secondary))
+    return players
+
+
+def read_roster(path: str) -> List[Player]:
     with open(path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
-        for r in reader:
-            pid = (r.get("id") or r.get("name") or "").strip()
-            # skip empty rows
-            if not pid:
-                continue
-            name = r.get("name") or pid
-            avail = int(r.get("available", "1"))
-            exp = int(r.get("experience", "1"))
-            prefs_raw = r.get("preferred_positions", "")
-            prefs = [p.strip().upper() for p in prefs_raw.replace("|", ";").split(";") if p.strip()]
-            sec_raw = r.get("secondary_positions", "")
-            secondary = [p.strip().upper() for p in sec_raw.replace("|", ";").split(";") if p.strip()]
-            players.append(Player(pid, name, avail, exp, prefs, secondary))
-    return players
+        return players_from_rows(reader)
 
 
 def build_slots(num_forwards_used: int, num_def_pairs_used: int, last_pair_partial: bool) -> Tuple[List[Tuple[str, str]], List[str]]:
@@ -85,8 +100,7 @@ def build_slots(num_forwards_used: int, num_def_pairs_used: int, last_pair_parti
     return slots, forward_slot_names
 
 
-def solve(roster_path: str, num_forwards_requested: int, num_defense_requested: int, time_limit: int):
-    players = read_roster(roster_path)
+def solve_lines(players: List[Player], num_forwards_requested: int, num_defense_requested: int, time_limit: int) -> SolveResponse:
     available_count = sum(1 for p in players if p.available == 1)
 
     # Prioritize full forward lines: use as many full forward lines (3 players) as possible
@@ -102,13 +116,14 @@ def solve(roster_path: str, num_forwards_requested: int, num_defense_requested: 
 
     slots, forward_slots = build_slots(num_forwards_used, num_def_pairs_used, last_pair_partial)
 
-    # Debug: report allocation decisions
-    total_slots = len(slots)
-    print(f"Available players: {available_count}")
-    print(f"Requested forwards: {num_forwards_requested}, forwards used: {num_forwards_used}")
-    print(f"Requested defense pairs: {num_defense_requested}, defense pairs used: {num_def_pairs_used}, last_partial={last_pair_partial}")
-    print(f"Total slots created: {total_slots}")
-    print(f"Slots: {[s for s,_ in slots]}")
+    summary_base = dict(
+        available_players=available_count,
+        forwards_requested=num_forwards_requested,
+        forwards_used=num_forwards_used,
+        defense_requested=num_defense_requested,
+        defense_pairs_used=num_def_pairs_used,
+        defense_last_partial=last_pair_partial,
+    )
 
     model = cp_model.CpModel()
 
@@ -208,80 +223,116 @@ def solve(roster_path: str, num_forwards_requested: int, num_defense_requested: 
 
     result = solver.Solve(model)
 
-    if result in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        print(f"Status: {solver.StatusName(result)}")
-        # helper formatter
-        def fmt(a):
-            s, p, status = a
-            tag = ""
-            if status == "secondary":
-                tag = "(secondary)"
-            elif status == "oop":
-                tag = "(OOP)"
-            return f"{p.name}({s}){tag}"
+    if result not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return SolveResponse(
+            status="NO_SOLUTION",
+            summary=SolveSummary(**summary_base, total_assigned=0, total_primary=0, total_secondary=0, total_oop=0),
+            forward_lines=[],
+            defense_pairs=[],
+        )
 
-        # print forward lines (only those used)
-        print(f"\nForwards: requested={num_forwards_requested} used={num_forwards_used}")
-        for l in range(1, num_forwards_used + 1):
-            line_slots = [f"F{l}_LW", f"F{l}_C", f"F{l}_RW"]
-            assigned_players = []
-            exp_sum = 0
-            primary_count = 0
-            secondary_count = 0
-            oop_count = 0
-            for s in line_slots:
-                for p in players:
-                    if solver.Value(x[(p.id, s)]) == 1:
-                        pos = s.split("_")[1]
-                        exp_sum += p.experience
-                        if pos in p.prefs:
-                            status = "primary"
-                            primary_count += 1
-                        elif pos in p.secondary:
-                            status = "secondary"
-                            secondary_count += 1
-                        else:
-                            status = "oop"
-                            oop_count += 1
-                        assigned_players.append((s, p, status))
+    status_name = "OPTIMAL" if result == cp_model.OPTIMAL else "FEASIBLE"
 
-            print(f"Line {l}: {', '.join([fmt(a) for a in assigned_players])} | exp_sum={exp_sum} | primary={primary_count} secondary={secondary_count} oop={oop_count}")
+    def classify(pos: str, p: Player) -> str:
+        if pos in p.prefs:
+            return "primary"
+        elif pos in p.secondary:
+            return "secondary"
+        return "oop"
 
-        # Defense: may be partial in last pair
-        print(f"\nDefense: requested_pairs={num_defense_requested} pairs_used={num_def_pairs_used} (last_partial={last_pair_partial})")
-        for d in range(1, num_def_pairs_used + 1):
-            pair_slots = [f"D{d}_LD"]
-            if not (last_pair_partial and d == num_def_pairs_used):
-                pair_slots.append(f"D{d}_RD")
-            assigned_players = []
-            primary_count = secondary_count = oop_count = 0
-            for s in pair_slots:
-                for p in players:
-                    if solver.Value(x[(p.id, s)]) == 1:
-                        pos = s.split("_")[1]
-                        if pos in p.prefs:
-                            status = "primary"
-                            primary_count += 1
-                        elif pos in p.secondary:
-                            status = "secondary"
-                            secondary_count += 1
-                        else:
-                            status = "oop"
-                            oop_count += 1
-                        assigned_players.append((s, p, status))
-            print(f"Pair {d}: {', '.join([fmt(a) for a in assigned_players])} | primary={primary_count} secondary={secondary_count} oop={oop_count}")
+    def build_assignment(s_name: str) -> SlotAssignment | None:
+        pos = s_name.split("_")[1]
+        for p in players:
+            if solver.Value(x[(p.id, s_name)]) == 1:
+                status = classify(pos, p)
+                return SlotAssignment(
+                    slot=s_name, position=pos, player_id=p.id, player_name=p.name,
+                    experience=p.experience, status=status,
+                )
+        return None
 
-        # overall stats
-        total_assigned = sum(1 for p in players if any(solver.Value(x[(p.id, s_name)]) == 1 for s_name, _ in slots))
-        total_primary = sum(1 for p in players for s_name, s_pos in slots if solver.Value(x[(p.id, s_name)]) == 1 and s_pos in p.prefs)
-        total_secondary = sum(1 for p in players for s_name, s_pos in slots if solver.Value(x[(p.id, s_name)]) == 1 and s_pos in p.secondary)
-        total_oop = total_assigned - total_primary - total_secondary
-        print(f"\nTotal assigned: {total_assigned}")
-        print(f"Primary-position assignments: {total_primary}")
-        print(f"Secondary-position assignments: {total_secondary}")
-        print(f"Out-of-position (OOP) assignments: {total_oop}")
-    else:
+    forward_lines: List[ForwardLine] = []
+    for l in range(1, num_forwards_used + 1):
+        line_slot_names = [f"F{l}_LW", f"F{l}_C", f"F{l}_RW"]
+        slot_assignments = [a for a in (build_assignment(s) for s in line_slot_names) if a is not None]
+        exp_sum = sum(a.experience for a in slot_assignments)
+        primary_count = sum(1 for a in slot_assignments if a.status == "primary")
+        secondary_count = sum(1 for a in slot_assignments if a.status == "secondary")
+        oop_count = sum(1 for a in slot_assignments if a.status == "oop")
+        forward_lines.append(ForwardLine(
+            line_number=l, slots=slot_assignments, exp_sum=exp_sum,
+            primary_count=primary_count, secondary_count=secondary_count, oop_count=oop_count,
+        ))
+
+    defense_pairs: List[DefensePair] = []
+    for d in range(1, num_def_pairs_used + 1):
+        partial = last_pair_partial and d == num_def_pairs_used
+        pair_slot_names = [f"D{d}_LD"] if partial else [f"D{d}_LD", f"D{d}_RD"]
+        slot_assignments = [a for a in (build_assignment(s) for s in pair_slot_names) if a is not None]
+        primary_count = sum(1 for a in slot_assignments if a.status == "primary")
+        secondary_count = sum(1 for a in slot_assignments if a.status == "secondary")
+        oop_count = sum(1 for a in slot_assignments if a.status == "oop")
+        defense_pairs.append(DefensePair(
+            pair_number=d, slots=slot_assignments,
+            primary_count=primary_count, secondary_count=secondary_count, oop_count=oop_count,
+            partial=partial,
+        ))
+
+    total_assigned = sum(1 for p in players if any(solver.Value(x[(p.id, s_name)]) == 1 for s_name, _ in slots))
+    total_primary = sum(1 for p in players for s_name, s_pos in slots if solver.Value(x[(p.id, s_name)]) == 1 and s_pos in p.prefs)
+    total_secondary = sum(1 for p in players for s_name, s_pos in slots if solver.Value(x[(p.id, s_name)]) == 1 and s_pos in p.secondary)
+    total_oop = total_assigned - total_primary - total_secondary
+
+    return SolveResponse(
+        status=status_name,
+        summary=SolveSummary(
+            **summary_base,
+            total_assigned=total_assigned,
+            total_primary=total_primary,
+            total_secondary=total_secondary,
+            total_oop=total_oop,
+        ),
+        forward_lines=forward_lines,
+        defense_pairs=defense_pairs,
+    )
+
+
+def print_solve_result(result: SolveResponse) -> None:
+    s = result.summary
+    print(f"Available players: {s.available_players}")
+    print(f"Requested forwards: {s.forwards_requested}, forwards used: {s.forwards_used}")
+    print(f"Requested defense pairs: {s.defense_requested}, defense pairs used: {s.defense_pairs_used}, last_partial={s.defense_last_partial}")
+
+    if result.status == "NO_SOLUTION":
         print("No solution found.")
+        return
+
+    slot_names = [a.slot for fl in result.forward_lines for a in fl.slots] + \
+                 [a.slot for dp in result.defense_pairs for a in dp.slots]
+    print(f"Total slots created: {len(slot_names)}")
+    print(f"Slots: {slot_names}")
+    print(f"Status: {result.status}")
+
+    def fmt(a: SlotAssignment) -> str:
+        tag = ""
+        if a.status == "secondary":
+            tag = "(secondary)"
+        elif a.status == "oop":
+            tag = "(OOP)"
+        return f"{a.player_name}({a.slot}){tag}"
+
+    print(f"\nForwards: requested={s.forwards_requested} used={s.forwards_used}")
+    for fl in result.forward_lines:
+        print(f"Line {fl.line_number}: {', '.join(fmt(a) for a in fl.slots)} | exp_sum={fl.exp_sum} | primary={fl.primary_count} secondary={fl.secondary_count} oop={fl.oop_count}")
+
+    print(f"\nDefense: requested_pairs={s.defense_requested} pairs_used={s.defense_pairs_used} (last_partial={s.defense_last_partial})")
+    for dp in result.defense_pairs:
+        print(f"Pair {dp.pair_number}: {', '.join(fmt(a) for a in dp.slots)} | primary={dp.primary_count} secondary={dp.secondary_count} oop={dp.oop_count}")
+
+    print(f"\nTotal assigned: {s.total_assigned}")
+    print(f"Primary-position assignments: {s.total_primary}")
+    print(f"Secondary-position assignments: {s.total_secondary}")
+    print(f"Out-of-position (OOP) assignments: {s.total_oop}")
 
 
 def main():
@@ -292,7 +343,9 @@ def main():
     ap.add_argument("--time-limit", type=int, default=20, help="Solver time limit in seconds")
     args = ap.parse_args()
 
-    solve(args.roster, args.forwards, args.defense, args.time_limit)
+    players = read_roster(args.roster)
+    result = solve_lines(players, args.forwards, args.defense, args.time_limit)
+    print_solve_result(result)
 
 
 if __name__ == "__main__":

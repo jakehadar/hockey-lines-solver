@@ -33,3 +33,94 @@ Options:
 Notes:
 - The objective maximizes number of assigned players first, then preference satisfaction, then minimizes forward-line experience imbalance (L1 norm).
 - Output now annotates assignments as `primary` (player's primary position), `secondary` (player's secondary position), or `OOP` (out-of-position when `--allow-oop` is used).
+
+## REST API
+
+`api.py` wraps the solver in a FastAPI service, so a separate frontend/client
+can call it over HTTP instead of shelling out to the CLI. `solver.py`'s core
+logic (`solve_lines`) is unchanged by this — the API and the CLI both call
+the same function.
+
+Run the dev server:
+
+```bash
+source ./venv/bin/activate
+pip install -r requirements.txt
+uvicorn api:app --reload
+```
+
+Interactive, auto-generated docs (try requests right in the browser):
+- Swagger UI: http://127.0.0.1:8000/docs
+- ReDoc: http://127.0.0.1:8000/redoc
+
+### Endpoints
+
+- `GET /health` — liveness check.
+- `POST /solve` — JSON roster in, JSON (or CSV) result out.
+- `POST /solve/csv` — CSV file upload in, JSON (or CSV) result out.
+
+Both `/solve` endpoints accept `?format=json` (default) or `?format=csv` to
+choose the response shape. `format=csv` returns a flat table of every
+player-slot assignment (`section,line_number,slot,position,player_id,
+player_name,experience,status`); `format=json` returns the full structured
+result (forward lines, defense pairs, and summary counts) — see the
+`SolveResponse` schema in `/docs` for exact field descriptions.
+
+### Examples
+
+JSON roster in, JSON out:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/solve" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "players": [
+      {"id": "p1", "name": "Alice", "available": 1, "experience": 3, "preferred_positions": ["LW"]},
+      {"id": "p2", "name": "Bob", "available": 1, "experience": 2, "preferred_positions": ["C"]},
+      {"id": "p3", "name": "Cy", "available": 1, "experience": 1, "preferred_positions": ["RW"]}
+    ],
+    "forwards": 1,
+    "defense": 0
+  }'
+```
+
+JSON roster in, CSV out:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/solve?format=csv" \
+  -H "Content-Type: application/json" \
+  -d '{"players": [...], "forwards": 3, "defense": 3}'
+```
+
+CSV file upload in, JSON out:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/solve/csv" \
+  -F "file=@roster_sample.csv" \
+  -F "forwards=3" \
+  -F "defense=3"
+```
+
+CSV file upload in, CSV out:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/solve/csv?format=csv" \
+  -F "file=@roster_sample.csv" \
+  -F "forwards=3" \
+  -F "defense=3"
+```
+
+Note: JSON roster payloads take `preferred_positions`/`secondary_positions`
+as actual arrays (e.g. `["LW", "C"]`), unlike the CSV format's
+semicolon-separated strings.
+
+### Tests
+
+```bash
+source ./venv/bin/activate
+pytest tests/ -v
+```
+
+`tests/test_api.py` exercises all four request/response combinations above
+via FastAPI's `TestClient` (no server process needed), and cross-checks the
+CSV-upload path against calling `solver.solve_lines()` directly.
