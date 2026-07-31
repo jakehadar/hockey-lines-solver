@@ -124,3 +124,23 @@ pytest tests/ -v
 `tests/test_api.py` exercises all four request/response combinations above
 via FastAPI's `TestClient` (no server process needed), and cross-checks the
 CSV-upload path against calling `solver.solve_lines()` directly.
+
+## Deploy to FastAPI Cloud
+
+The project ships a `pyproject.toml` (dependencies + `[tool.fastapi] entrypoint
+= "api:app"`) and a `.fastapicloudignore` (excludes `tests/` and local scratch
+roster CSVs from the uploaded archive), so it deploys as-is from the repo root:
+
+```bash
+pip install fastapi-cloud-cli
+fastapi cloud login
+fastapi cloud deploy
+```
+
+The first `deploy` will prompt you to create/link an app; subsequent runs
+from the same directory reuse that link (stored in `.fastapicloud/cloud.json`,
+which is git-ignored automatically).
+
+Note: `api.py` currently sets `allow_origins=["*"]` for CORS, which is a
+dev-friendly default — restrict it to your actual frontend origin(s) before
+relying on this in production.
