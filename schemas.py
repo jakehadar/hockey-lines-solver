@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Literal
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -19,6 +19,18 @@ class PlayerIn(BaseModel):
     secondary_positions: List[str] = Field(
         default_factory=list,
         description="Positions this player will play if needed, at lower priority than preferred_positions.",
+    )
+    unwilling_positions: List[str] = Field(
+        default_factory=list,
+        description="Positions this player must never be assigned to (hard constraint).",
+    )
+    optional_position_override: Optional[str] = Field(
+        None,
+        description="If set, the only position this player may be assigned to, overriding preferred/secondary/unwilling. For quick what-if tweaks.",
+    )
+    optional_player_link: Optional[str] = Field(
+        None,
+        description="Player id that must be assigned to the same forward line or defense pair as this player (or both benched together). For quick what-if tweaks.",
     )
 
 

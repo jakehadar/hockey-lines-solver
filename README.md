@@ -16,12 +16,19 @@ CSV format (header): `id,name,available,experience,preferred_positions,secondary
 - `experience`: integer 1..5
 - `preferred_positions`: semicolon-separated positions like `LW;C` (positions: `LW`,`C`,`RW`,`LD`,`RD`)
 
+Optional columns (omit entirely for a roster CSV that predates these — fully backwards compatible):
+- `unwilling_positions`: semicolon-separated positions this player must never be assigned to (hard constraint).
+- `optional_position_override`: a single position; if set, it's the *only* position this player may be assigned to, overriding preferred/secondary/unwilling. Meant for quick what-if tweaks without editing a player's actual preferences.
+- `optional_player_link`: another player's id; forces both players onto the same forward line or defense pair together (or both benched together). Works for forwards and defense.
+
+These optional levers do no validation — an unsatisfiable combination (e.g. two players both overridden to the same position with only one such slot, or conflicting links) will simply make the solve infeasible (`NO_SOLUTION`) rather than raising an error.
+
 Quick start (macOS, using provided venv at `./venv`):
 
 ```bash
 source ./venv/bin/activate
 pip install -r requirements.txt
-python solver.py --roster roster_sample.csv --forwards 3 --defense 3
+python solver.py --forwards 3 --defense 3 --roster rosters/roster_sample.csv
 ```
 
 Options:

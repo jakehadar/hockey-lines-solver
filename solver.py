@@ -12,6 +12,16 @@ CSV format (header): id,name,available,experience,preferred_positions,secondary_
     - `preferred_positions` is semicolon-separated, e.g. "LW;C"
     - `secondary_positions` is semicolon-separated positions a player will play if needed
 
+Optional columns (omit entirely for backwards compatibility with older rosters):
+    - `unwilling_positions`: semicolon-separated positions this player may never be
+      assigned to (hard constraint).
+    - `optional_position_override`: a single position; if set, it's the *only*
+      position this player may be assigned to, overriding preferred/secondary/
+      unwilling. For quick what-if tweaks without editing a player's preferences.
+    - `optional_player_link`: another player's id; forces both players onto the
+      same forward line or defense pair (or both benched together). Works for
+      forward lines and defense pairs alike.
+
 This script builds a CP-SAT model that:
   - assigns players to forward and defense slots
   - enforces availability and unique assignment
@@ -28,8 +38,8 @@ import argparse
 import csv
 import sys
 from collections import defaultdict
-from dataclasses import dataclass
-from typing import Dict, Iterable, List, Tuple
+from dataclasses import dataclass, field
+from typing import Dict, Iterable, List, Optional, Tuple
 
 try:
     from ortools.sat.python import cp_model
@@ -55,6 +65,9 @@ class Player:
     experience: int
     prefs: List[str]
     secondary: List[str]
+    unwilling: List[str] = field(default_factory=list)
+    position_override: Optional[str] = None
+    link: Optional[str] = None
 
 
 def players_from_rows(rows: Iterable[dict]) -> List[Player]:
@@ -71,7 +84,13 @@ def players_from_rows(rows: Iterable[dict]) -> List[Player]:
         prefs = [p.strip().upper() for p in prefs_raw.replace("|", ";").split(";") if p.strip()]
         sec_raw = r.get("secondary_positions", "")
         secondary = [p.strip().upper() for p in sec_raw.replace("|", ";").split(";") if p.strip()]
-        players.append(Player(pid, name, avail, exp, prefs, secondary))
+        unwilling_raw = r.get("unwilling_positions", "") or ""
+        unwilling = [p.strip().upper() for p in unwilling_raw.replace("|", ";").split(";") if p.strip()]
+        override_raw = (r.get("optional_position_override", "") or "").strip().upper()
+        position_override = override_raw or None
+        link_raw = (r.get("optional_player_link", "") or "").strip()
+        link = link_raw or None
+        players.append(Player(pid, name, avail, exp, prefs, secondary, unwilling, position_override, link))
     return players
 
 
@@ -146,6 +165,43 @@ def solve_lines(players: List[Player], num_forwards_requested: int, num_defense_
     # each player at most one slot
     for p in players:
         model.Add(sum(x[(p.id, s_name)] for s_name, _ in slots) <= 1)
+
+    # optional_position_override: restrict this player to exactly one position,
+    # overriding preferred/secondary/unwilling entirely.
+    # unwilling_positions: hard-forbid these positions (skipped if overridden).
+    for p in players:
+        if p.position_override:
+            for s_name, s_pos in slots:
+                if s_pos != p.position_override:
+                    model.Add(x[(p.id, s_name)] == 0)
+        elif p.unwilling:
+            for s_name, s_pos in slots:
+                if s_pos in p.unwilling:
+                    model.Add(x[(p.id, s_name)] == 0)
+
+    # optional_player_link: force linked players onto the same forward line or
+    # defense pair together (or both benched together). Units are derived from
+    # the slot-name prefix ("F1", "D2", ...), which covers forwards and defense.
+    units: Dict[str, List[str]] = defaultdict(list)
+    for s_name, _ in slots:
+        units[s_name.split("_")[0]].append(s_name)
+
+    presence: Dict[Tuple[str, str], cp_model.IntVar] = {}
+    players_by_id = {p.id: p for p in players}
+    linked_ids = {p.id for p in players if p.link and p.link in players_by_id}
+    linked_ids |= {p.link for p in players if p.link and p.link in players_by_id}
+    for p in players:
+        if p.id not in linked_ids:
+            continue
+        for unit, unit_slots in units.items():
+            v = model.NewBoolVar(f"pres_{p.id}_{unit}")
+            model.Add(v == sum(x[(p.id, s_name)] for s_name in unit_slots))
+            presence[(p.id, unit)] = v
+
+    for p in players:
+        if p.link and p.link in players_by_id:
+            for unit in units:
+                model.Add(presence[(p.id, unit)] == presence[(p.link, unit)])
 
     # preference score (soft) with primary and secondary positions
     # primary weight = 2, secondary weight = 1, OOP weight = 0

@@ -71,6 +71,9 @@ def _players_from_player_in(players_in: list[PlayerIn]) -> list[solver.Player]:
             experience=p.experience,
             prefs=[pos.upper() for pos in p.preferred_positions],
             secondary=[pos.upper() for pos in p.secondary_positions],
+            unwilling=[pos.upper() for pos in p.unwilling_positions],
+            position_override=p.optional_position_override.upper() if p.optional_position_override else None,
+            link=p.optional_player_link or None,
         )
         for p in players_in
     ]
@@ -117,7 +120,8 @@ def solve_json(
     summary="Solve lines from an uploaded CSV roster",
     description=(
         "Accepts a roster CSV file upload (header: "
-        "id,name,available,experience,preferred_positions,secondary_positions) "
+        "id,name,available,experience,preferred_positions,secondary_positions, "
+        "plus optional unwilling_positions,optional_position_override,optional_player_link) "
         "and returns the optimized line assignments."
     ),
     response_model=SolveResponse,
