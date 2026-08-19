@@ -4,7 +4,7 @@ Simple CP-SAT based solver to assign players to hockey forward lines and defensi
 
 Files added:
 - `solver.py` - the main solver script (uses OR-Tools CP-SAT)
-- `roster_sample.csv` - example roster CSV
+- `rosters/sample_roster.csv` - example roster CSV
 - `requirements.txt` - Python dependency list
 
 CSV format (header): `id,name,available,experience,preferred_positions,secondary_positions`
@@ -28,7 +28,7 @@ Quick start (macOS, using provided venv at `./venv`):
 ```bash
 source ./venv/bin/activate
 pip install -r requirements.txt
-python solver.py --forwards 3 --defense 3 --roster rosters/roster_sample.csv
+python solver.py --forwards 3 --defense 3 --roster rosters/sample_roster.csv
 ```
 
 Options:
@@ -103,7 +103,7 @@ CSV file upload in, JSON out:
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/solve/csv" \
-  -F "file=@roster_sample.csv" \
+  -F "file=@rosters/sample_roster.csv" \
   -F "forwards=3" \
   -F "defense=3"
 ```
@@ -112,7 +112,7 @@ CSV file upload in, CSV out:
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/solve/csv?format=csv" \
-  -F "file=@roster_sample.csv" \
+  -F "file=@rosters/sample_roster.csv" \
   -F "forwards=3" \
   -F "defense=3"
 ```

@@ -3,7 +3,7 @@ import os
 import solver
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SAMPLE_ROSTER = os.path.join(REPO_ROOT, "roster_sample.csv")
+SAMPLE_ROSTER = os.path.join(REPO_ROOT, "rosters", "sample_roster.csv")
 
 
 def unit_of(slot: str) -> str:

@@ -10,7 +10,7 @@ from api import app
 client = TestClient(app)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SAMPLE_ROSTER = os.path.join(REPO_ROOT, "roster_sample.csv")
+SAMPLE_ROSTER = os.path.join(REPO_ROOT, "rosters", "sample_roster.csv")
 
 SMALL_PLAYERS = [
     {"id": "p1", "name": "Alice", "available": 1, "experience": 3, "preferred_positions": ["LW"], "secondary_positions": []},
