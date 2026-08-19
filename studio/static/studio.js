@@ -229,6 +229,10 @@
     scheduleSolve();
   });
 
+  for (const id of ["setting-forwards", "setting-defense", "setting-time-limit"]) {
+    document.getElementById(id).addEventListener("change", scheduleSolve);
+  }
+
   document.getElementById("add-player-btn").addEventListener("click", () => {
     players.push({
       id: nextId("P"),
