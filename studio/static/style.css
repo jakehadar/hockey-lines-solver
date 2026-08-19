@@ -1,0 +1,131 @@
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --border: #e0e3e8;
+  --text: #1c2230;
+  --muted: #6b7280;
+  --accent: #2f6fed;
+  --accent-weak: #eaf1ff;
+  --ok: #1a9e6b;
+  --ok-weak: #e7f8f1;
+  --danger: #d1453b;
+  --danger-weak: #fdecea;
+  --radius: 8px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.topbar {
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.brand { font-weight: 700; color: var(--text); text-decoration: none; font-size: 1.05rem; }
+
+main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
+
+h1 { margin-top: 0; }
+h2 { font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0 0 0.6rem; }
+
+/* Rosters list */
+.new-roster-form { display: flex; gap: 0.5rem; margin-bottom: 1.25rem; }
+.new-roster-form input[type="text"] { padding: 0.5rem 0.7rem; border: 1px solid var(--border); border-radius: var(--radius); flex: 0 0 320px; }
+.rosters-table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.rosters-table th, .rosters-table td { text-align: left; padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--border); }
+.rosters-table a { color: var(--accent); text-decoration: none; font-weight: 600; }
+.rosters-table td:last-child { width: 1%; white-space: nowrap; }
+.empty { color: var(--muted); }
+
+.delete-btn { border-color: transparent; background: transparent; color: var(--muted); font-size: 0.8rem; padding: 0.3rem 0.6rem; }
+.delete-btn:hover { color: var(--danger); border-color: var(--danger); background: var(--danger-weak); }
+
+button {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 0.45rem 0.8rem;
+  font-size: 0.9rem;
+}
+button:hover { border-color: var(--accent); color: var(--accent); }
+#save-btn, #solve-now-btn { background: var(--accent); border-color: var(--accent); color: #fff; }
+#save-btn:hover, #solve-now-btn:hover { opacity: 0.9; color: #fff; }
+
+/* Studio header */
+.studio-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+.title-group { display: flex; align-items: center; gap: 0.75rem; }
+.back-link { color: var(--muted); text-decoration: none; font-size: 0.85rem; }
+#roster-title { font-size: 1.2rem; font-weight: 700; border: 1px solid transparent; border-radius: var(--radius); padding: 0.2rem 0.4rem; background: transparent; }
+#roster-title:hover, #roster-title:focus { border-color: var(--border); background: var(--panel); }
+.actions { display: flex; align-items: center; gap: 0.5rem; }
+
+.switch { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--muted); }
+
+.status-banner { padding: 0.6rem 0.9rem; border-radius: var(--radius); margin-bottom: 1rem; font-size: 0.9rem; font-weight: 600; }
+.status-banner.ok { background: var(--ok-weak); color: var(--ok); }
+.status-banner.infeasible { background: var(--danger-weak); color: var(--danger); }
+
+/* Layout */
+.studio-layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 1.25rem; align-items: start; }
+@media (max-width: 1000px) { .studio-layout { grid-template-columns: 1fr; } }
+
+.roster-panel, .results-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  overflow-x: auto;
+}
+.panel-header { display: flex; justify-content: space-between; align-items: center; }
+.add-buttons { display: flex; gap: 0.5rem; }
+
+.solve-settings { display: flex; gap: 1rem; margin: 0.75rem 0; font-size: 0.85rem; color: var(--muted); }
+.solve-settings input { width: 4em; margin-left: 0.3rem; }
+
+.roster-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.roster-table th { text-align: left; padding: 0.4rem; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--border); }
+.roster-table td { padding: 0.4rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.roster-table tr.alt-row { background: #fff9ea; }
+.roster-table input[type="text"] { width: 8em; border: 1px solid var(--border); border-radius: 6px; padding: 0.2rem 0.4rem; }
+.roster-table select { border: 1px solid var(--border); border-radius: 6px; padding: 0.2rem; max-width: 8em; }
+.roster-table td.chips { min-width: 9em; }
+
+.chip { display: inline-flex; align-items: center; gap: 0.15rem; font-size: 0.75rem; margin-right: 0.35rem; color: var(--muted); }
+.chip input { margin: 0; }
+
+.badge { display: inline-block; font-size: 0.7rem; font-weight: 700; padding: 0.1rem 0.4rem; border-radius: 999px; background: var(--accent-weak); color: var(--accent); }
+.badge.alt { background: #fff2cc; color: #8a6d00; }
+.badge.status-primary { background: var(--ok-weak); color: var(--ok); }
+.badge.status-secondary { background: var(--accent-weak); color: var(--accent); }
+.badge.status-oop { background: var(--danger-weak); color: var(--danger); }
+
+/* Results */
+.lines-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.75rem; margin-bottom: 1.25rem; }
+.line-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.6rem 0.75rem; }
+.line-card h3 { margin: 0 0 0.5rem; font-size: 0.9rem; display: flex; justify-content: space-between; }
+.line-card .exp { color: var(--muted); font-weight: 400; font-size: 0.8rem; }
+.slot { display: flex; justify-content: space-between; align-items: center; gap: 0.4rem; padding: 0.25rem 0; font-size: 0.85rem; }
+.slot.empty { color: var(--muted); }
+.slot-pos { font-weight: 700; width: 2.2em; color: var(--muted); }
+.slot-name { flex: 1; }
+.line-counts { margin-top: 0.4rem; font-size: 0.75rem; color: var(--muted); }
+
+.summary-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; }
+.summary-stats > div { display: flex; justify-content: space-between; padding: 0.35rem 0.5rem; background: var(--bg); border-radius: 6px; }
+.stat-label { color: var(--muted); font-size: 0.8rem; }
+.stat-val { font-weight: 700; }

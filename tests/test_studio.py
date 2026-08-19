@@ -1,0 +1,122 @@
+import importlib
+
+import pytest
+
+
+@pytest.fixture
+def studio(tmp_path, monkeypatch):
+    from studio import db as db_module
+
+    monkeypatch.setattr(db_module, "DB_PATH", tmp_path / "test_studio.db")
+
+    import studio.app as app_module
+
+    importlib.reload(app_module)  # re-run module-level db.init_db() against the patched path
+    app_module.app.testing = True
+    return app_module, db_module
+
+
+@pytest.fixture
+def client(studio):
+    app_module, _ = studio
+    with app_module.app.test_client() as c:
+        yield c
+
+
+SMALL_PLAYERS = [
+    {"id": "P1", "name": "Alice", "available": 1, "experience": 3, "preferred_positions": ["LW"], "secondary_positions": []},
+    {"id": "P2", "name": "Bob", "available": 1, "experience": 2, "preferred_positions": ["C"], "secondary_positions": []},
+    {"id": "P3", "name": "Cy", "available": 1, "experience": 1, "preferred_positions": ["RW"], "secondary_positions": []},
+]
+
+
+def _create_roster(client, title="Test Roster"):
+    resp = client.post("/rosters/new", data={"title": title}, follow_redirects=False)
+    assert resp.status_code == 302
+    roster_id = int(resp.headers["Location"].rstrip("/").rsplit("/", 1)[-1])
+    return roster_id
+
+
+def test_new_blank_roster_has_no_players(client, studio):
+    _, db_module = studio
+    roster_id = _create_roster(client)
+    assert db_module.list_players(roster_id) == []
+
+    resp = client.get(f"/studio/{roster_id}")
+    assert resp.status_code == 200
+    assert b"INITIAL_ROSTER = []" in resp.data
+
+
+def test_delete_roster_removes_it_and_its_players(client, studio):
+    _, db_module = studio
+    roster_id = _create_roster(client)
+    client.post(f"/studio/{roster_id}/save", json={"players": SMALL_PLAYERS})
+    assert len(db_module.list_players(roster_id)) == 3
+
+    resp = client.post(f"/rosters/{roster_id}/delete", follow_redirects=False)
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("/rosters")
+
+    assert db_module.get_roster(roster_id) is None
+    assert db_module.list_players(roster_id) == []
+    assert client.get(f"/studio/{roster_id}").status_code == 404
+
+
+def test_solve_endpoint_is_stateless(client):
+    roster_id = _create_roster(client)
+    resp = client.post(
+        f"/studio/{roster_id}/solve",
+        json={"players": SMALL_PLAYERS, "forwards": 1, "defense": 0, "time_limit": 5},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] in ("OPTIMAL", "FEASIBLE")
+    assert body["summary"]["total_assigned"] == 3
+    assert body["summary"]["total_primary"] == 3
+
+
+def test_save_persists_unwilling_positions_but_not_ephemeral_fields(client, studio):
+    _, db_module = studio
+    roster_id = _create_roster(client)
+
+    players = [
+        {
+            "id": "P1",
+            "name": "Alice",
+            "available": 1,
+            "experience": 3,
+            "preferred_positions": ["LW"],
+            "secondary_positions": ["RW"],
+            "unwilling_positions": ["C"],
+            "optional_position_override": "LW",
+            "optional_player_link": "P2",
+        }
+    ]
+    resp = client.post(f"/studio/{roster_id}/save", json={"players": players})
+    assert resp.status_code == 200
+
+    rows = db_module.list_players(roster_id)
+    assert len(rows) == 1
+    assert rows[0]["unwilling_positions"] == "C"
+
+    # Reloading the page hydrates from the DB, where override/link never lived.
+    resp = client.get(f"/studio/{roster_id}")
+    assert b'"optional_position_override": null' in resp.data
+    assert b'"optional_player_link": null' in resp.data
+
+
+def test_save_as_creates_an_independent_roster(client, studio):
+    _, db_module = studio
+    roster_id = _create_roster(client, title="Original")
+    client.post(f"/studio/{roster_id}/save", json={"players": SMALL_PLAYERS})
+
+    resp = client.post(
+        f"/studio/{roster_id}/save-as",
+        json={"title": "Copy", "players": SMALL_PLAYERS[:2]},
+    )
+    assert resp.status_code == 200
+    new_id = resp.get_json()["roster_id"]
+    assert new_id != roster_id
+
+    assert len(db_module.list_players(roster_id)) == 3
+    assert len(db_module.list_players(new_id)) == 2

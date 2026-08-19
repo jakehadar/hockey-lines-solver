@@ -151,3 +151,36 @@ which is git-ignored automatically).
 Note: `api.py` currently sets `allow_origins=["*"]` for CORS, which is a
 dev-friendly default — restrict it to your actual frontend origin(s) before
 relying on this in production.
+
+## Studio: interactive scenario planning
+
+`studio/` is a Flask app for building and persisting rosters in SQLite and
+running interactive what-if scenarios against `solver.py` — a UI on top of
+the same solver core the CLI and `api.py` use (imported in-process, not over
+HTTP). It's an experimental first iteration; team/season/game-day concepts
+are intentionally out of scope, but multi-roster support is already there
+as the extension point for that later.
+
+Run it:
+
+```bash
+source ./venv/bin/activate
+pip install -r requirements.txt
+python -m studio.app          # http://127.0.0.1:5000, SQLite at studio/instance/rosters.db
+```
+
+Optionally seed a roster from an existing CSV to try it out:
+
+```bash
+python -m studio.seed --csv rosters/sample_roster.csv --title "Sample Roster"
+```
+
+What it does:
+- **Rosters list** (`/rosters`) — create a blank roster (title only) or open an existing one.
+- **Studio page** (`/studio/<id>`) — one roster panel per player (availability, experience, preferred/secondary/**unwilling** positions, plus two scenario-only levers: a position override and a link-to-another-player), a live grid of the solved forward lines/defense pairs, and a summary panel (experience sums, primary/secondary/OOP counts). An infeasible combination shows a banner instead of a stale grid.
+- **Auto/manual solve toggle** — auto re-solves (debounced) after every edit; manual only solves on "Solve now".
+- **Persisted vs. scenario-only fields** — availability, experience, name, and preferred/secondary/**unwilling** positions round-trip to SQLite via **Save** (in place) or **Save As** (a new roster, for branching off a variant). The position override and player link are always ephemeral — never saved, always reset to "none" on load — by design, so they stay a cheap what-if lever.
+- **Reset** — discards every in-memory edit back to the roster as last loaded/saved, in case a scenario wanders into infeasibility.
+- **Alts** — "+ Add alt" creates a player flagged as not part of the core roster (`A##` id vs. the regular `P##`), pre-filled with all positions as preferred and experience 3 as a starting point. Alt-vs-full-time is fixed at creation; to change it, delete the row and add the other kind.
+
+Tests: `pytest tests/test_studio.py -v` (uses Flask's test client with an isolated temp SQLite DB per test).

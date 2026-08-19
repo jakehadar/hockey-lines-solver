@@ -51,6 +51,7 @@ except Exception as e:
 from schemas import (
     DefensePair,
     ForwardLine,
+    PlayerIn,
     SlotAssignment,
     SolveResponse,
     SolveSummary,
@@ -92,6 +93,23 @@ def players_from_rows(rows: Iterable[dict]) -> List[Player]:
         link = link_raw or None
         players.append(Player(pid, name, avail, exp, prefs, secondary, unwilling, position_override, link))
     return players
+
+
+def players_from_player_in(players_in: Iterable[PlayerIn]) -> List[Player]:
+    return [
+        Player(
+            id=p.id,
+            name=p.name,
+            available=p.available,
+            experience=p.experience,
+            prefs=[pos.upper() for pos in p.preferred_positions],
+            secondary=[pos.upper() for pos in p.secondary_positions],
+            unwilling=[pos.upper() for pos in p.unwilling_positions],
+            position_override=p.optional_position_override.upper() if p.optional_position_override else None,
+            link=p.optional_player_link or None,
+        )
+        for p in players_in
+    ]
 
 
 def read_roster(path: str) -> List[Player]:

@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}{{ roster['title'] }} — Studio{% endblock %}
+{% block content %}
+<div id="studio-root" data-roster-id="{{ roster['id'] }}">
+
+  <div class="studio-header">
+    <div class="title-group">
+      <a class="back-link" href="{{ url_for('rosters_list') }}">&larr; Rosters</a>
+      <input id="roster-title" type="text" value="{{ roster['title'] }}">
+    </div>
+    <div class="actions">
+      <label class="switch">
+        <input type="checkbox" id="auto-solve-toggle" checked>
+        <span>Auto-solve</span>
+      </label>
+      <button id="solve-now-btn" type="button">Solve now</button>
+      <button id="reset-btn" type="button" title="Discard all in-memory edits back to the loaded roster">Reset</button>
+      <button id="save-btn" type="button">Save</button>
+      <button id="save-as-btn" type="button">Save As&hellip;</button>
+    </div>
+  </div>
+
+  <div id="status-banner" class="status-banner" hidden></div>
+
+  <div class="studio-layout">
+    <section class="roster-panel">
+      <div class="panel-header">
+        <h2>Roster</h2>
+        <div class="add-buttons">
+          <button id="add-player-btn" type="button">+ Add player</button>
+          <button id="add-alt-btn" type="button">+ Add alt</button>
+        </div>
+      </div>
+      <div class="solve-settings">
+        <label>Forwards <input id="setting-forwards" type="number" min="0" value="3"></label>
+        <label>Defense <input id="setting-defense" type="number" min="0" value="3"></label>
+        <label>Time limit (s) <input id="setting-time-limit" type="number" min="1" value="5"></label>
+      </div>
+      <table class="roster-table">
+        <thead>
+          <tr>
+            <th></th>
+            <th>Name</th>
+            <th>Exp</th>
+            <th>Avail</th>
+            <th>Preferred</th>
+            <th>Secondary</th>
+            <th>Unwilling</th>
+            <th>Override</th>
+            <th>Link to</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="roster-tbody"></tbody>
+      </table>
+    </section>
+
+    <section class="results-panel">
+      <h2>Lines</h2>
+      <div id="grid"></div>
+      <h2>Summary</h2>
+      <div id="summary"></div>
+    </section>
+  </div>
+</div>
+
+<script>
+  window.INITIAL_ROSTER = {{ players | tojson }};
+  window.POSITIONS = {{ positions | tojson }};
+  window.ROSTER_ID = {{ roster['id'] }};
+</script>
+<script src="{{ url_for('static', filename='studio.js') }}"></script>
+{% endblock %}

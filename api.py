@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 import solver
-from schemas import PlayerIn, SolveRequest, SolveResponse
+from schemas import SolveRequest, SolveResponse
 
 app = FastAPI(
     title="Hockey Lines Solver API",
@@ -62,23 +62,6 @@ def _respond(result: SolveResponse, format: str) -> Response | SolveResponse:
     return result
 
 
-def _players_from_player_in(players_in: list[PlayerIn]) -> list[solver.Player]:
-    return [
-        solver.Player(
-            id=p.id,
-            name=p.name,
-            available=p.available,
-            experience=p.experience,
-            prefs=[pos.upper() for pos in p.preferred_positions],
-            secondary=[pos.upper() for pos in p.secondary_positions],
-            unwilling=[pos.upper() for pos in p.unwilling_positions],
-            position_override=p.optional_position_override.upper() if p.optional_position_override else None,
-            link=p.optional_player_link or None,
-        )
-        for p in players_in
-    ]
-
-
 FormatParam = Query("json", description="Response format: 'json' for a structured SolveResponse, 'csv' for a flat assignment table.")
 
 CSV_RESPONSE_DOC = {
@@ -110,7 +93,7 @@ def solve_json(
     if request.forwards < 0 or request.defense < 0:
         raise HTTPException(status_code=400, detail="forwards and defense must be >= 0.")
 
-    players = _players_from_player_in(request.players)
+    players = solver.players_from_player_in(request.players)
     result = solver.solve_lines(players, request.forwards, request.defense, request.time_limit)
     return _respond(result, format)
 
