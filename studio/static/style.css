@@ -281,6 +281,7 @@ dialog#scenario-dialog h2 { margin: 0 0 1rem; font-size: 1.05rem; }
 .badge { display: inline-block; font-size: 0.7rem; font-weight: 700; padding: 0.1rem 0.4rem; border-radius: 999px; background: var(--accent-weak); color: var(--accent); }
 .badge.alt { background: #fff2cc; color: #8a6d00; }
 .badge.scenario { background: #fff2cc; color: #8a6d00; text-transform: uppercase; letter-spacing: 0.03em; }
+.loaded-scenario-note { font-size: 0.8rem; color: var(--muted); }
 .badge.status-primary { background: var(--ok-weak); color: var(--ok); }
 .badge.status-secondary { background: var(--accent-weak); color: var(--accent); }
 .badge.status-oop { background: var(--danger-weak); color: var(--danger); }
@@ -307,5 +308,7 @@ dialog#scenario-dialog h2 { margin: 0 0 1rem; font-size: 1.05rem; }
 .compare-column-header { margin-bottom: 0.9rem; }
 .compare-column-header h2 { font-size: 1rem; text-transform: none; letter-spacing: normal; color: var(--text); margin: 0 0 0.3rem; display: flex; align-items: center; gap: 0.4rem; }
 .compare-description { margin: 0 0 0.4rem; font-size: 0.82rem; color: var(--muted); line-height: 1.4; }
-.compare-settings { margin: 0; font-size: 0.78rem; color: var(--muted); }
+.compare-settings { margin: 0 0 0.5rem; font-size: 0.78rem; color: var(--muted); }
+.compare-load-link { font-size: 0.78rem; color: var(--accent); text-decoration: none; }
+.compare-load-link:hover { text-decoration: underline; }
 .compare-column .lines-grid { grid-template-columns: 1fr; }

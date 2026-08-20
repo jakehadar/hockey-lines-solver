@@ -1,6 +1,7 @@
 import importlib
 import io
 import json
+import re
 
 import pytest
 
@@ -445,3 +446,74 @@ def test_compare_view_with_no_valid_ids_errors(client, studio):
     token, roster_id = _create_roster(client)
     resp = client.get(f"/w/{token}/studio/{roster_id}/compare?ids=999")
     assert resp.status_code == 400
+
+
+def _extract_json_var(body, var_name):
+    m = re.search(r"window\." + var_name + r" = (.*?);\n", body, re.DOTALL)
+    assert m is not None, f"{var_name} not found on the page"
+    return json.loads(m.group(1))
+
+
+def test_loading_a_scenario_seeds_players_but_leaves_the_roster_untouched(client, studio):
+    _, db_module = studio
+    token, roster_id = _create_roster(client)
+    _save_roster(client, token, roster_id, SMALL_PLAYERS)
+
+    scenario_id = _create_scenario(
+        client, token, roster_id, title="Bench Bob", players=SMALL_PLAYERS[:1], result=_fake_result("OPTIMAL")
+    ).get_json()["scenario_id"]
+
+    resp = client.get(f"/w/{token}/studio/{roster_id}?load_scenario={scenario_id}")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "Loaded from scenario: Bench Bob" in body
+
+    initial_roster = _extract_json_var(body, "INITIAL_ROSTER")
+    loaded_scenario = _extract_json_var(body, "LOADED_SCENARIO")
+
+    assert [p["id"] for p in initial_roster] == ["P1", "P2", "P3"]  # the roster's real saved players
+    assert [p["id"] for p in loaded_scenario["players"]] == ["P1"]  # the scenario's snapshot
+    assert loaded_scenario["result"]["status"] == "OPTIMAL"
+
+    # Loading a scenario for viewing never modifies the roster itself.
+    assert len(db_module.list_players(roster_id)) == 3
+
+
+def test_loading_the_baseline_scenario_404s(client, studio):
+    _, db_module = studio
+    token, roster_id = _create_roster(client)
+    _save_roster(client, token, roster_id, SMALL_PLAYERS)
+    baseline_id = next(s["id"] for s in db_module.list_scenarios(roster_id) if s["is_baseline"])
+
+    resp = client.get(f"/w/{token}/studio/{roster_id}?load_scenario={baseline_id}")
+    assert resp.status_code == 404
+
+
+def test_loading_an_unknown_scenario_404s(client, studio):
+    token, roster_id = _create_roster(client)
+    resp = client.get(f"/w/{token}/studio/{roster_id}?load_scenario=999")
+    assert resp.status_code == 404
+
+
+def test_scenarios_list_offers_load_only_for_named_scenarios(client, studio):
+    token, roster_id = _create_roster(client)
+    _save_roster(client, token, roster_id, SMALL_PLAYERS)
+    scenario_id = _create_scenario(client, token, roster_id, title="Named").get_json()["scenario_id"]
+
+    resp = client.get(f"/w/{token}/studio/{roster_id}/scenarios")
+    body = resp.get_data(as_text=True)
+    assert f"load_scenario={scenario_id}" in body
+    assert body.count("load_scenario=") == 1  # baseline row doesn't get one
+
+
+def test_compare_view_offers_load_only_for_named_scenarios(client, studio):
+    _, db_module = studio
+    token, roster_id = _create_roster(client)
+    _save_roster(client, token, roster_id, SMALL_PLAYERS)
+    scenario_id = _create_scenario(client, token, roster_id, title="Named").get_json()["scenario_id"]
+    baseline_id = next(s["id"] for s in db_module.list_scenarios(roster_id) if s["is_baseline"])
+
+    resp = client.get(f"/w/{token}/studio/{roster_id}/compare?ids={scenario_id}&ids={baseline_id}")
+    body = resp.get_data(as_text=True)
+    assert f"load_scenario={scenario_id}" in body
+    assert body.count("load_scenario=") == 1  # baseline column doesn't get one

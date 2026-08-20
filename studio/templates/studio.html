@@ -8,6 +8,9 @@
       <a class="back-link" href="{{ url_for('rosters_list') }}">&larr; Rosters</a>
       <input id="roster-title" type="text" value="{{ roster['title'] }}">
       <span id="scenario-badge" class="badge scenario" title="This view has changes not yet saved to the roster" hidden>Scenario mode</span>
+      {% if loaded_scenario %}
+      <span class="loaded-scenario-note">Loaded from scenario: {{ loaded_scenario['title'] }}</span>
+      {% endif %}
     </div>
     <div class="actions">
       <label class="switch">
@@ -97,6 +100,7 @@
   window.POSITIONS = {{ positions | tojson }};
   window.ROSTER_ID = {{ roster['id'] }};
   window.EXISTING_SCENARIO_TITLES = {{ scenario_titles | tojson }};
+  window.LOADED_SCENARIO = {{ loaded_scenario | tojson }};
 </script>
 <script src="{{ url_for('static', filename='studio.js') }}"></script>
 {% endblock %}

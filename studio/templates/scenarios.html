@@ -12,7 +12,7 @@
 <form method="get" action="{{ url_for('scenarios_compare', roster_id=roster['id']) }}">
   <table class="rosters-table">
     <thead>
-      <tr><th></th><th>Title</th><th>Description</th><th>Created</th><th></th></tr>
+      <tr><th></th><th>Title</th><th>Description</th><th>Created</th><th></th><th></th></tr>
     </thead>
     <tbody>
       {% for s in scenarios %}
@@ -21,6 +21,11 @@
         <td>{{ s['title'] }}{% if s['is_baseline'] %} <span class="badge scenario">Baseline</span>{% endif %}</td>
         <td>{{ s['description'] }}</td>
         <td>{{ s['created_at'] }}</td>
+        <td>
+          {% if not s['is_baseline'] %}
+          <a href="{{ url_for('studio_view', roster_id=roster['id'], load_scenario=s['id']) }}" title="Open the roster editor with this scenario's players and settings restored">Load&hellip;</a>
+          {% endif %}
+        </td>
         <td>
           {% if not s['is_baseline'] %}
           <form method="post" action="{{ url_for('scenarios_delete', roster_id=roster['id'], scenario_id=s['id']) }}"

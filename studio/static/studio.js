@@ -5,8 +5,13 @@
   const POSITIONS = window.POSITIONS;
   const STUDIO_BASE = "/w/" + window.WORKSPACE_TOKEN + "/studio/" + ROSTER_ID;
 
-  let players = JSON.parse(JSON.stringify(window.INITIAL_ROSTER));
+  const loadedScenario = window.LOADED_SCENARIO || null;
+
+  // baseline always tracks the roster's own saved players, never a loaded
+  // scenario's - so loading a scenario naturally lands in scenario mode
+  // (players != baseline) with Reset as the way back to what's actually saved.
   let baseline = JSON.parse(JSON.stringify(window.INITIAL_ROSTER));
+  let players = loadedScenario ? JSON.parse(JSON.stringify(loadedScenario.players)) : JSON.parse(JSON.stringify(window.INITIAL_ROSTER));
   let lastResult = null;
   let debounceTimer = null;
   // True whenever lastResult may not reflect the players/settings currently
@@ -430,6 +435,18 @@
     }
   });
 
-  render();
-  doSolve();
+  if (loadedScenario) {
+    // Settings and the cached result came from the same snapshot as
+    // `players`, so there's nothing to re-solve - render it as-is.
+    document.getElementById("setting-forwards").value = loadedScenario.forwards;
+    document.getElementById("setting-defense").value = loadedScenario.defense;
+    document.getElementById("setting-time-limit").value = loadedScenario.time_limit;
+    lastResult = loadedScenario.result;
+    resultPending = false;
+    render();
+    updateSaveScenarioAvailability();
+  } else {
+    render();
+    doSolve();
+  }
 })();

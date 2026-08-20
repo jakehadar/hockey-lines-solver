@@ -266,12 +266,33 @@ def studio_view(roster_id: int):
         abort(404)
     players = [_row_to_player_in_dict(r) for r in db.list_players(roster_id)]
     scenario_titles = [s["title"] for s in db.list_scenarios(roster_id) if not s["is_baseline"]]
+
+    loaded_scenario = None
+    load_scenario_id = request.args.get("load_scenario")
+    if load_scenario_id is not None:
+        # The baseline scenario's players_json is the stripped roster-truth
+        # shape (no id/override/link), not the full PlayerIn shape a named
+        # scenario stores - loading it here wouldn't parse right, and it's
+        # redundant anyway (it's just the roster's own current players).
+        scenario = db.get_scenario(int(load_scenario_id), roster_id) if load_scenario_id.isdigit() else None
+        if scenario is None or scenario["is_baseline"]:
+            abort(404, description="Scenario not found.")
+        loaded_scenario = {
+            "title": scenario["title"],
+            "players": json.loads(scenario["players_json"]),
+            "forwards": scenario["forwards"],
+            "defense": scenario["defense"],
+            "time_limit": scenario["time_limit"],
+            "result": json.loads(scenario["result_json"]),
+        }
+
     return render_template(
         "studio.html",
         roster=roster,
         players=players,
         positions=POSITIONS,
         scenario_titles=scenario_titles,
+        loaded_scenario=loaded_scenario,
     )
 
 
@@ -390,6 +411,7 @@ def scenarios_compare(roster_id: int):
             "forwards": s["forwards"],
             "defense": s["defense"],
             "time_limit": s["time_limit"],
+            "load_url": None if s["is_baseline"] else url_for("studio_view", roster_id=roster_id, load_scenario=s["id"]),
             "result": json.loads(s["result_json"]),
         }
         for s in scenarios
