@@ -149,3 +149,28 @@ def test_workspaces_are_isolated_from_each_other(client, studio):
 
 def test_unknown_workspace_token_404s(client):
     assert client.get("/w/not-a-real-token/rosters").status_code == 404
+
+
+def test_new_workspace_is_seeded_with_the_sample_roster(client, studio):
+    _, db_module = studio
+    token = _workspace_token(client)
+    workspace = db_module.get_workspace_by_token(token)
+
+    rosters = db_module.list_rosters(workspace["id"])
+    assert len(rosters) == 1
+    assert rosters[0]["title"] == "Sample Roster"
+    assert len(db_module.list_players(rosters[0]["id"])) > 0
+
+
+def test_workspace_creation_is_rate_limited_per_ip(client, studio, monkeypatch):
+    app_module, _ = studio
+    monkeypatch.setattr(app_module, "WORKSPACE_CREATE_LIMIT", 2)
+
+    for _ in range(2):
+        client.delete_cookie("workspace_token")
+        resp = client.get("/", follow_redirects=False)
+        assert resp.status_code == 302
+
+    client.delete_cookie("workspace_token")
+    resp = client.get("/", follow_redirects=False)
+    assert resp.status_code == 429

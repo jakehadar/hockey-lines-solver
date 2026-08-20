@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import secrets
 import sqlite3
+from pathlib import Path
 from typing import Any
 
 from flask import Flask, abort, g, jsonify, redirect, render_template, request, url_for
@@ -22,6 +23,14 @@ from studio import db
 POSITIONS = ["LW", "C", "RW", "LD", "RD"]
 WORKSPACE_COOKIE = "workspace_token"
 WORKSPACE_COOKIE_MAX_AGE = 60 * 60 * 24 * 400  # ~400 days, the browser-enforced ceiling
+
+# Throttle for minting new workspaces: without it, a script that never keeps
+# cookies could create unbounded rows just by hitting "/" in a loop.
+WORKSPACE_CREATE_LIMIT = 20
+WORKSPACE_CREATE_WINDOW_SECONDS = 60 * 60
+
+SAMPLE_ROSTER_CSV = Path(__file__).resolve().parent.parent / "rosters" / "sample_roster.csv"
+SAMPLE_ROSTER_TITLE = "Sample Roster"
 
 app = Flask(__name__)
 
@@ -46,6 +55,11 @@ def _require_workspace() -> sqlite3.Row:
     if workspace is None:
         abort(404, description="Workspace not found. Check the link, or start a new workspace from the home page.")
     return workspace
+
+
+def _seed_sample_roster(workspace_id: int) -> None:
+    players = solver.read_roster(str(SAMPLE_ROSTER_CSV))
+    db.save_as_new_roster(workspace_id, SAMPLE_ROSTER_TITLE, db.player_records_from_players(players))
 
 
 def _row_to_player_in_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -93,8 +107,14 @@ def index():
     if workspace is not None:
         return redirect(url_for("rosters_list", token=token))
 
+    client_ip = request.remote_addr or "unknown"
+    recent = db.count_recent_workspaces_from_ip(client_ip, WORKSPACE_CREATE_WINDOW_SECONDS)
+    if recent >= WORKSPACE_CREATE_LIMIT:
+        abort(429, description="Too many workspaces created from this address recently. Try again later.")
+
     token = secrets.token_urlsafe(16)
-    db.create_workspace(token)
+    workspace_id = db.create_workspace(token, client_ip)
+    _seed_sample_roster(workspace_id)
     resp = redirect(url_for("rosters_list", token=token, new="1"))
     resp.set_cookie(WORKSPACE_COOKIE, token, max_age=WORKSPACE_COOKIE_MAX_AGE, httponly=True, samesite="Lax")
     return resp

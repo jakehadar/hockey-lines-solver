@@ -62,15 +62,24 @@ def init_db(db_path: Path | None = None) -> None:
         conn.executescript(SCHEMA_PATH.read_text())
 
 
-def create_workspace(token: str, db_path: Path | None = None) -> int:
+def create_workspace(token: str, client_ip: str | None = None, db_path: Path | None = None) -> int:
     with get_connection(db_path) as conn:
-        cur = conn.execute("INSERT INTO workspaces (token) VALUES (?)", (token,))
+        cur = conn.execute("INSERT INTO workspaces (token, client_ip) VALUES (?, ?)", (token, client_ip))
         return cur.lastrowid
 
 
 def get_workspace_by_token(token: str, db_path: Path | None = None) -> sqlite3.Row | None:
     with get_connection(db_path) as conn:
         return conn.execute("SELECT id, token, created_at FROM workspaces WHERE token = ?", (token,)).fetchone()
+
+
+def count_recent_workspaces_from_ip(client_ip: str, window_seconds: int, db_path: Path | None = None) -> int:
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM workspaces WHERE client_ip = ? AND created_at >= datetime('now', ?)",
+            (client_ip, f"-{window_seconds} seconds"),
+        ).fetchone()
+        return row["n"]
 
 
 def list_rosters(workspace_id: int, db_path: Path | None = None) -> List[sqlite3.Row]:
@@ -135,6 +144,22 @@ def replace_players(roster_id: int, players: List[PlayerRecord], db_path: Path |
     with get_connection(db_path) as conn:
         conn.execute("DELETE FROM players WHERE roster_id = ?", (roster_id,))
         _insert_players(conn, roster_id, players)
+
+
+def player_records_from_players(players: Iterable) -> List[PlayerRecord]:
+    """Convert solver.Player objects (e.g. from solver.read_roster) to PlayerRecords."""
+    return [
+        {
+            "player_key": p.id,
+            "name": p.name,
+            "available": p.available,
+            "experience": p.experience,
+            "preferred_positions": p.prefs,
+            "secondary_positions": p.secondary,
+            "unwilling_positions": p.unwilling,
+        }
+        for p in players
+    ]
 
 
 def save_as_new_roster(
