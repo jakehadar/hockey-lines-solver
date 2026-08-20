@@ -16,10 +16,37 @@
       </label>
       <button id="solve-now-btn" type="button">Solve now</button>
       <button id="reset-btn" type="button" title="Discard all in-memory edits back to the loaded roster">Reset</button>
-      <button id="save-btn" type="button">Save</button>
-      <button id="save-as-btn" type="button">Save As&hellip;</button>
+      <a class="scenarios-link" href="{{ url_for('scenarios_view', roster_id=roster['id']) }}">Scenarios</a>
+      <div class="split-btn" id="save-group">
+        <button id="save-btn" type="button">Save to roster</button>
+        <button id="save-menu-toggle" type="button" class="split-btn-toggle" aria-expanded="false" aria-controls="save-menu" aria-label="More save options">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="save-menu" id="save-menu" role="menu">
+          <button type="button" class="save-menu-item" id="save-as-roster-btn" role="menuitem">Save as new roster&hellip;</button>
+          <button type="button" class="save-menu-item" id="save-scenario-btn" role="menuitem">Save as scenario&hellip;</button>
+        </div>
+      </div>
     </div>
   </div>
+
+  <dialog id="scenario-dialog">
+    <form id="scenario-form">
+      <h2>Save as scenario</h2>
+      <label class="dialog-field">
+        Title
+        <input type="text" id="scenario-title" required>
+      </label>
+      <details class="scenario-description-details">
+        <summary>Add a description</summary>
+        <textarea id="scenario-description" rows="3" placeholder="Optional notes about this scenario"></textarea>
+      </details>
+      <div class="dialog-actions">
+        <button type="button" id="scenario-cancel-btn">Cancel</button>
+        <button type="submit" id="scenario-submit-btn">Save scenario</button>
+      </div>
+    </form>
+  </dialog>
 
   <div id="status-banner" class="status-banner" hidden></div>
 
@@ -69,6 +96,7 @@
   window.INITIAL_ROSTER = {{ players | tojson }};
   window.POSITIONS = {{ positions | tojson }};
   window.ROSTER_ID = {{ roster['id'] }};
+  window.EXISTING_SCENARIO_TITLES = {{ scenario_titles | tojson }};
 </script>
 <script src="{{ url_for('static', filename='studio.js') }}"></script>
 {% endblock %}

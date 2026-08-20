@@ -9,6 +9,12 @@
   let baseline = JSON.parse(JSON.stringify(window.INITIAL_ROSTER));
   let lastResult = null;
   let debounceTimer = null;
+  // True whenever lastResult may not reflect the players/settings currently
+  // on screen - from the moment a solve is kicked off until it resolves.
+  // Doesn't cover the ~400ms debounce window before a solve starts; that
+  // residual gap is accepted as a tradeoff for keeping this simple.
+  let resultPending = true;
+  let scenarioTitles = (window.EXISTING_SCENARIO_TITLES || []).slice();
 
   const tbody = document.getElementById("roster-tbody");
   const gridEl = document.getElementById("grid");
@@ -18,6 +24,13 @@
   const titleInput = document.getElementById("roster-title");
   const resetBtn = document.getElementById("reset-btn");
   const scenarioBadge = document.getElementById("scenario-badge");
+  const saveMenu = document.getElementById("save-menu");
+  const saveMenuToggle = document.getElementById("save-menu-toggle");
+  const saveScenarioBtn = document.getElementById("save-scenario-btn");
+  const scenarioDialog = document.getElementById("scenario-dialog");
+  const scenarioForm = document.getElementById("scenario-form");
+  const scenarioTitleInput = document.getElementById("scenario-title");
+  const scenarioDescriptionInput = document.getElementById("scenario-description");
 
   function isDirty() {
     return JSON.stringify(players) !== JSON.stringify(baseline);
@@ -27,6 +40,28 @@
     const dirty = isDirty();
     resetBtn.disabled = !dirty;
     scenarioBadge.hidden = !dirty;
+  }
+
+  function updateSaveScenarioAvailability() {
+    saveScenarioBtn.disabled = resultPending;
+  }
+
+  function currentSettings() {
+    return {
+      forwards: parseInt(document.getElementById("setting-forwards").value, 10) || 0,
+      defense: parseInt(document.getElementById("setting-defense").value, 10) || 0,
+      time_limit: parseInt(document.getElementById("setting-time-limit").value, 10) || 5,
+    };
+  }
+
+  function nextScenarioTitle() {
+    let max = 0;
+    const re = /^Scenario (\d+)$/;
+    for (const t of scenarioTitles) {
+      const m = re.exec(t);
+      if (m) max = Math.max(max, parseInt(m[1], 10));
+    }
+    return "Scenario " + (max + 1);
   }
 
   function nextId(prefix) {
@@ -187,21 +222,17 @@
   }
 
   async function doSolve() {
-    const forwards = parseInt(document.getElementById("setting-forwards").value, 10) || 0;
-    const defense = parseInt(document.getElementById("setting-defense").value, 10) || 0;
-    const timeLimit = parseInt(document.getElementById("setting-time-limit").value, 10) || 5;
+    resultPending = true;
+    updateSaveScenarioAvailability();
+    const settings = currentSettings();
     const resp = await fetch(STUDIO_BASE + "/solve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ players: players, forwards: forwards, defense: defense, time_limit: timeLimit }),
+      body: JSON.stringify({ players: players, forwards: settings.forwards, defense: settings.defense, time_limit: settings.time_limit }),
     });
-    if (!resp.ok) {
-      lastResult = { status: "NO_SOLUTION" };
-      renderGrid();
-      renderBanner();
-      return;
-    }
-    lastResult = await resp.json();
+    lastResult = resp.ok ? await resp.json() : { status: "NO_SOLUTION" };
+    resultPending = false;
+    updateSaveScenarioAvailability();
     renderGrid();
     renderBanner();
   }
@@ -302,10 +333,17 @@
     if (isDirty() && !confirm("Save will replace the saved roster with the version shown here. Continue?")) {
       return;
     }
+    const settings = currentSettings();
     const resp = await fetch(STUDIO_BASE + "/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ players: players }),
+      body: JSON.stringify({
+        players: players,
+        forwards: settings.forwards,
+        defense: settings.defense,
+        time_limit: settings.time_limit,
+        result: lastResult,
+      }),
     });
     if (resp.ok) {
       baseline = JSON.parse(JSON.stringify(players));
@@ -315,7 +353,30 @@
     }
   });
 
-  document.getElementById("save-as-btn").addEventListener("click", async () => {
+  function closeSaveMenu() {
+    saveMenu.classList.remove("open");
+    saveMenuToggle.setAttribute("aria-expanded", "false");
+  }
+
+  saveMenuToggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (saveMenu.classList.contains("open")) closeSaveMenu();
+    else {
+      saveMenu.classList.add("open");
+      saveMenuToggle.setAttribute("aria-expanded", "true");
+    }
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!saveMenu.contains(e.target) && e.target !== saveMenuToggle) closeSaveMenu();
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeSaveMenu();
+  });
+
+  document.getElementById("save-as-roster-btn").addEventListener("click", async () => {
+    closeSaveMenu();
     const title = prompt("Title for the new roster:", titleInput.value + " (copy)");
     if (!title) return;
     const resp = await fetch(STUDIO_BASE + "/save-as", {
@@ -328,6 +389,44 @@
       window.location = "/w/" + window.WORKSPACE_TOKEN + "/studio/" + data.roster_id;
     } else {
       alert("Save As failed.");
+    }
+  });
+
+  saveScenarioBtn.addEventListener("click", () => {
+    closeSaveMenu();
+    if (saveScenarioBtn.disabled) return;
+    scenarioTitleInput.value = nextScenarioTitle();
+    scenarioDescriptionInput.value = "";
+    scenarioDialog.showModal();
+    scenarioTitleInput.focus();
+    scenarioTitleInput.select();
+  });
+
+  document.getElementById("scenario-cancel-btn").addEventListener("click", () => scenarioDialog.close());
+
+  scenarioForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const title = scenarioTitleInput.value.trim();
+    if (!title) return;
+    const settings = currentSettings();
+    const resp = await fetch(STUDIO_BASE + "/scenarios", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: title,
+        description: scenarioDescriptionInput.value.trim(),
+        players: players,
+        forwards: settings.forwards,
+        defense: settings.defense,
+        time_limit: settings.time_limit,
+        result: lastResult,
+      }),
+    });
+    if (resp.ok) {
+      scenarioTitles.push(title);
+      scenarioDialog.close();
+    } else {
+      alert("Save scenario failed.");
     }
   });
 

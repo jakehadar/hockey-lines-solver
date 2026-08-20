@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Scenarios — {{ roster['title'] }} — Studio{% endblock %}
+{% block content %}
+<div class="studio-header">
+  <div class="title-group">
+    <a class="back-link" href="{{ url_for('studio_view', roster_id=roster['id']) }}">&larr; {{ roster['title'] }}</a>
+    <h1>Scenarios</h1>
+  </div>
+</div>
+
+{% if scenarios %}
+<form method="get" action="{{ url_for('scenarios_compare', roster_id=roster['id']) }}">
+  <table class="rosters-table">
+    <thead>
+      <tr><th></th><th>Title</th><th>Description</th><th>Created</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for s in scenarios %}
+      <tr>
+        <td><input type="checkbox" name="ids" value="{{ s['id'] }}" {% if s['is_baseline'] %}checked{% endif %}></td>
+        <td>{{ s['title'] }}{% if s['is_baseline'] %} <span class="badge scenario">Baseline</span>{% endif %}</td>
+        <td>{{ s['description'] }}</td>
+        <td>{{ s['created_at'] }}</td>
+        <td>
+          {% if not s['is_baseline'] %}
+          <form method="post" action="{{ url_for('scenarios_delete', roster_id=roster['id'], scenario_id=s['id']) }}"
+                onsubmit="return confirm('Delete scenario &quot;{{ s['title'] }}&quot;? This cannot be undone.');">
+            <button type="submit" class="delete-btn">Delete</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <button type="submit">Compare selected</button>
+</form>
+{% else %}
+<p class="empty">No scenarios yet. Save one from the roster editor.</p>
+{% endif %}
+{% endblock %}

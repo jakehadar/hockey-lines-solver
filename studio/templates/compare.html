@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Compare — {{ roster['title'] }} — Studio{% endblock %}
+{% block content %}
+<div class="studio-header">
+  <div class="title-group">
+    <a class="back-link" href="{{ url_for('scenarios_view', roster_id=roster['id']) }}">&larr; Scenarios</a>
+    <h1>Compare — {{ roster['title'] }}</h1>
+  </div>
+</div>
+
+<div id="compare-grid" class="compare-grid"></div>
+
+<script>
+  window.SCENARIOS = {{ scenarios | tojson }};
+</script>
+<script src="{{ url_for('static', filename='compare.js') }}"></script>
+{% endblock %}
