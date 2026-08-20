@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import re
 import secrets
 import sqlite3
@@ -20,7 +21,7 @@ from flask import Flask, Response, abort, g, jsonify, redirect, render_template,
 from pydantic import ValidationError
 
 import solver
-from schemas import PlayerIn, SolveRequest
+from schemas import PlayerIn, RosterSave, ScenarioSave, SolveRequest
 from studio import db
 
 POSITIONS = ["LW", "C", "RW", "LD", "RD"]
@@ -264,11 +265,34 @@ def studio_view(roster_id: int):
     if roster is None:
         abort(404)
     players = [_row_to_player_in_dict(r) for r in db.list_players(roster_id)]
+    scenario_titles = [s["title"] for s in db.list_scenarios(roster_id) if not s["is_baseline"]]
+
+    loaded_scenario = None
+    load_scenario_id = request.args.get("load_scenario")
+    if load_scenario_id is not None:
+        # The baseline scenario's players_json is the stripped roster-truth
+        # shape (no id/override/link), not the full PlayerIn shape a named
+        # scenario stores - loading it here wouldn't parse right, and it's
+        # redundant anyway (it's just the roster's own current players).
+        scenario = db.get_scenario(int(load_scenario_id), roster_id) if load_scenario_id.isdigit() else None
+        if scenario is None or scenario["is_baseline"]:
+            abort(404, description="Scenario not found.")
+        loaded_scenario = {
+            "title": scenario["title"],
+            "players": json.loads(scenario["players_json"]),
+            "forwards": scenario["forwards"],
+            "defense": scenario["defense"],
+            "time_limit": scenario["time_limit"],
+            "result": json.loads(scenario["result_json"]),
+        }
+
     return render_template(
         "studio.html",
         roster=roster,
         players=players,
         positions=POSITIONS,
+        scenario_titles=scenario_titles,
+        loaded_scenario=loaded_scenario,
     )
 
 
@@ -295,8 +319,15 @@ def studio_save(roster_id: int):
     if db.get_roster(roster_id, workspace["id"]) is None:
         abort(404)
     body = request.get_json(silent=True) or {}
-    players = _parse_players(body.get("players"))
-    db.replace_players(roster_id, _players_to_records(players))
+    try:
+        req = RosterSave.model_validate(body)
+    except ValidationError as e:
+        abort(400, description=str(e))
+    records = _players_to_records(req.players)
+    db.replace_players(roster_id, records)
+    db.upsert_baseline_scenario(
+        roster_id, req.forwards, req.defense, req.time_limit, json.dumps(records), req.result.model_dump_json()
+    )
     return jsonify({"roster_id": roster_id})
 
 
@@ -312,6 +343,80 @@ def studio_save_as(roster_id: int):
     players = _parse_players(body.get("players"))
     new_roster_id = db.save_as_new_roster(workspace["id"], title, _players_to_records(players))
     return jsonify({"roster_id": new_roster_id})
+
+
+@app.post("/w/<token>/studio/<int:roster_id>/scenarios")
+def scenarios_create(roster_id: int):
+    workspace = _require_workspace()
+    if db.get_roster(roster_id, workspace["id"]) is None:
+        abort(404)
+    body = request.get_json(silent=True) or {}
+    try:
+        req = ScenarioSave.model_validate(body)
+    except ValidationError as e:
+        abort(400, description=str(e))
+    title = req.title.strip()
+    if not title:
+        abort(400, description="title is required.")
+    scenario_id = db.create_scenario(
+        roster_id,
+        title,
+        req.description.strip(),
+        req.forwards,
+        req.defense,
+        req.time_limit,
+        json.dumps([p.model_dump() for p in req.players]),
+        req.result.model_dump_json(),
+    )
+    return jsonify({"scenario_id": scenario_id})
+
+
+@app.get("/w/<token>/studio/<int:roster_id>/scenarios")
+def scenarios_view(roster_id: int):
+    workspace = _require_workspace()
+    roster = db.get_roster(roster_id, workspace["id"])
+    if roster is None:
+        abort(404)
+    scenarios = db.list_scenarios(roster_id)
+    return render_template("scenarios.html", roster=roster, scenarios=scenarios)
+
+
+@app.post("/w/<token>/studio/<int:roster_id>/scenarios/<int:scenario_id>/delete")
+def scenarios_delete(roster_id: int, scenario_id: int):
+    workspace = _require_workspace()
+    if db.get_roster(roster_id, workspace["id"]) is None:
+        abort(404)
+    db.delete_scenario(scenario_id, roster_id)
+    return redirect(url_for("scenarios_view", roster_id=roster_id))
+
+
+@app.get("/w/<token>/studio/<int:roster_id>/compare")
+def scenarios_compare(roster_id: int):
+    workspace = _require_workspace()
+    roster = db.get_roster(roster_id, workspace["id"])
+    if roster is None:
+        abort(404)
+
+    ids = [int(raw) for raw in request.args.getlist("ids") if raw.isdigit()]
+    scenarios = [row for sid in ids if (row := db.get_scenario(sid, roster_id)) is not None]
+    if not scenarios:
+        abort(400, description="No valid scenarios selected to compare.")
+
+    compare_data = [
+        {
+            "id": s["id"],
+            "title": s["title"],
+            "description": s["description"],
+            "is_baseline": bool(s["is_baseline"]),
+            "forwards": s["forwards"],
+            "defense": s["defense"],
+            "time_limit": s["time_limit"],
+            "load_url": None if s["is_baseline"] else url_for("studio_view", roster_id=roster_id, load_scenario=s["id"]),
+            "result": json.loads(s["result_json"]),
+        }
+        for s in scenarios
+    ]
+    return render_template("compare.html", roster=roster, scenarios=compare_data)
 
 
 db.init_db()

@@ -90,3 +90,19 @@ class SolveResponse(BaseModel):
     summary: SolveSummary = Field(..., description="Aggregate stats for this solve.")
     forward_lines: List[ForwardLine] = Field(..., description="Forward line assignments, in line order.")
     defense_pairs: List[DefensePair] = Field(..., description="Defense pair assignments, in pair order.")
+
+
+class RosterSave(SolveRequest):
+    """Studio's Save (to roster): the client already solved this exact
+    players+settings snapshot, so it sends the result along rather than
+    having the server re-solve just to cache it."""
+
+    result: SolveResponse = Field(..., description="The solve result this exact snapshot produced.")
+
+
+class ScenarioSave(RosterSave):
+    """Studio's Save as scenario: a named, described snapshot alongside its
+    cached result, independent of the roster's own saved baseline."""
+
+    title: str = Field(..., min_length=1, description="Scenario name.")
+    description: str = Field("", description="Optional freeform notes.")

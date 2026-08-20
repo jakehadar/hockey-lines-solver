@@ -30,12 +30,13 @@
   </thead>
   <tbody>
     {% for r in rosters %}
+    {% set warning = ' This will also permanently delete ' ~ r['scenario_count'] ~ ' saved scenario' ~ ('s' if r['scenario_count'] != 1 else '') ~ '.' if r['scenario_count'] else '' %}
     <tr>
       <td><a href="{{ url_for('studio_view', roster_id=r['id']) }}">{{ r['title'] }}</a></td>
       <td>{{ r['created_at'] }}</td>
       <td>
         <form method="post" action="{{ url_for('rosters_delete', roster_id=r['id']) }}"
-              onsubmit="return confirm('Delete roster &quot;{{ r['title'] }}&quot;? This cannot be undone.');">
+              onsubmit="return confirm('Delete roster &quot;{{ r['title'] }}&quot;?{{ warning }} This cannot be undone.');">
           <button type="submit" class="delete-btn">Delete</button>
         </form>
       </td>

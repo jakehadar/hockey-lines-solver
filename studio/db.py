@@ -85,7 +85,9 @@ def count_recent_workspaces_from_ip(client_ip: str, window_seconds: int, db_path
 def list_rosters(workspace_id: int, db_path: Path | None = None) -> List[sqlite3.Row]:
     with get_connection(db_path) as conn:
         return conn.execute(
-            "SELECT id, title, created_at FROM rosters WHERE workspace_id = ? ORDER BY created_at DESC",
+            "SELECT r.id, r.title, r.created_at, "
+            "(SELECT COUNT(*) FROM scenarios s WHERE s.roster_id = r.id AND s.is_baseline = 0) AS scenario_count "
+            "FROM rosters r WHERE r.workspace_id = ? ORDER BY r.created_at DESC",
             (workspace_id,),
         ).fetchall()
 
@@ -170,3 +172,88 @@ def save_as_new_roster(
         roster_id = cur.lastrowid
         _insert_players(conn, roster_id, players)
         return roster_id
+
+
+# --- Scenarios --------------------------------------------------------
+#
+# A scenario is an immutable snapshot (players + solve settings + the
+# result they produced) - players_json/result_json are opaque JSON text as
+# far as this module is concerned; studio/app.py owns their shape.
+
+
+def upsert_baseline_scenario(
+    roster_id: int,
+    forwards: int,
+    defense: int,
+    time_limit: int,
+    players_json: str,
+    result_json: str,
+    db_path: Path | None = None,
+) -> int:
+    """Keep the roster's one is_baseline=1 scenario in sync with what "Save
+    to roster" just persisted, creating it on first save."""
+    with get_connection(db_path) as conn:
+        existing = conn.execute(
+            "SELECT id FROM scenarios WHERE roster_id = ? AND is_baseline = 1", (roster_id,)
+        ).fetchone()
+        if existing is not None:
+            conn.execute(
+                "UPDATE scenarios SET forwards = ?, defense = ?, time_limit = ?, "
+                "players_json = ?, result_json = ?, created_at = datetime('now') WHERE id = ?",
+                (forwards, defense, time_limit, players_json, result_json, existing["id"]),
+            )
+            return existing["id"]
+        cur = conn.execute(
+            "INSERT INTO scenarios (roster_id, title, is_baseline, forwards, defense, time_limit, "
+            "players_json, result_json) VALUES (?, 'Baseline', 1, ?, ?, ?, ?, ?)",
+            (roster_id, forwards, defense, time_limit, players_json, result_json),
+        )
+        return cur.lastrowid
+
+
+def create_scenario(
+    roster_id: int,
+    title: str,
+    description: str,
+    forwards: int,
+    defense: int,
+    time_limit: int,
+    players_json: str,
+    result_json: str,
+    db_path: Path | None = None,
+) -> int:
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            "INSERT INTO scenarios (roster_id, title, description, forwards, defense, time_limit, "
+            "players_json, result_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (roster_id, title, description, forwards, defense, time_limit, players_json, result_json),
+        )
+        return cur.lastrowid
+
+
+def list_scenarios(roster_id: int, db_path: Path | None = None) -> List[sqlite3.Row]:
+    with get_connection(db_path) as conn:
+        return conn.execute(
+            "SELECT id, title, description, created_at, is_baseline, forwards, defense, time_limit, "
+            "algo_version FROM scenarios WHERE roster_id = ? ORDER BY is_baseline DESC, created_at DESC",
+            (roster_id,),
+        ).fetchall()
+
+
+def get_scenario(scenario_id: int, roster_id: int, db_path: Path | None = None) -> sqlite3.Row | None:
+    with get_connection(db_path) as conn:
+        return conn.execute(
+            "SELECT id, title, description, created_at, is_baseline, forwards, defense, time_limit, "
+            "algo_version, players_json, result_json FROM scenarios WHERE id = ? AND roster_id = ?",
+            (scenario_id, roster_id),
+        ).fetchone()
+
+
+def delete_scenario(scenario_id: int, roster_id: int, db_path: Path | None = None) -> None:
+    # is_baseline = 0 guard: the baseline row isn't user-deletable, it's
+    # kept in sync by Save and only ever goes away with its roster.
+    with get_connection(db_path) as conn:
+        conn.execute(
+            "DELETE FROM scenarios WHERE id = ? AND roster_id = ? AND is_baseline = 0",
+            (scenario_id, roster_id),
+        )

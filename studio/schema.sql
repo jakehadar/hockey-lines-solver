@@ -32,3 +32,35 @@ CREATE TABLE IF NOT EXISTS players (
 );
 
 CREATE INDEX IF NOT EXISTS idx_players_roster_id ON players(roster_id);
+
+-- A scenario is an immutable snapshot: a roster's players + solve settings
+-- at some point in time, plus the solve result that snapshot produced. It's
+-- never edited in place - if you want to iterate, go back to the roster,
+-- change it, and save a new scenario.
+--
+-- Every roster always has at most one is_baseline=1 scenario, kept in sync
+-- by "Save to roster": it represents the roster's own current persisted
+-- state as just another scenario, so a comparison view never needs to
+-- special-case "the roster itself" vs. "a named scenario."
+CREATE TABLE IF NOT EXISTS scenarios (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    roster_id INTEGER NOT NULL REFERENCES rosters(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    is_baseline INTEGER NOT NULL DEFAULT 0,
+    forwards INTEGER NOT NULL,
+    defense INTEGER NOT NULL,
+    time_limit INTEGER NOT NULL,
+    -- Bumped only when solver.py's algorithm changes in a way that could
+    -- change results for the same inputs; 0 until that first happens. Lets a
+    -- future comparison view flag scenarios computed under an older
+    -- algorithm instead of silently treating them as current.
+    algo_version INTEGER NOT NULL DEFAULT 0,
+    players_json TEXT NOT NULL,
+    result_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_scenarios_roster_id ON scenarios(roster_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_scenarios_one_baseline_per_roster
+    ON scenarios(roster_id) WHERE is_baseline = 1;
