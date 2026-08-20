@@ -1,4 +1,5 @@
 import importlib
+import io
 
 import pytest
 
@@ -190,3 +191,64 @@ def test_blocked_cookies_get_a_helpful_page_instead_of_a_new_workspace_every_tim
     with db_module.get_connection(db_module.DB_PATH) as conn:
         count = conn.execute("SELECT COUNT(*) AS n FROM workspaces").fetchone()["n"]
     assert count == 0
+
+
+def test_csv_upload_creates_a_roster_with_defaults_and_generated_ids(client, studio):
+    _, db_module = studio
+    token = _workspace_token(client)
+
+    csv_bytes = (
+        b"name,available,experience,preferred_positions,unrelated_column\n"
+        b"Alice,,,LW;C,ignored\n"
+        b",1,3,RW,ignored\n"  # no name -> skipped
+        b"Bob,0,4,RD,ignored\n"
+    )
+    resp = client.post(
+        f"/w/{token}/rosters/upload",
+        data={"file": (io.BytesIO(csv_bytes), "My Team.csv")},
+        content_type="multipart/form-data",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    roster_id = int(resp.headers["Location"].rstrip("/").rsplit("/", 1)[-1])
+
+    rosters = db_module.list_rosters(db_module.get_workspace_by_token(token)["id"])
+    assert {r["title"] for r in rosters} == {"Sample Roster", "My Team"}
+
+    players = db_module.list_players(roster_id)
+    assert len(players) == 2
+
+    alice = next(p for p in players if p["name"] == "Alice")
+    assert alice["player_key"] == "P01"
+    assert alice["available"] == 1  # blank -> defaulted
+    assert alice["experience"] == 1  # blank -> defaulted
+    assert alice["preferred_positions"] == "LW;C"
+
+    bob = next(p for p in players if p["name"] == "Bob")
+    assert bob["player_key"] == "P02"
+    assert bob["available"] == 0
+    assert bob["experience"] == 4
+
+
+def test_csv_upload_without_a_name_column_shows_an_error_and_creates_nothing(client, studio):
+    _, db_module = studio
+    token = _workspace_token(client)
+
+    csv_bytes = b"foo,bar\n1,2\n"
+    resp = client.post(
+        f"/w/{token}/rosters/upload",
+        data={"file": (io.BytesIO(csv_bytes), "not_a_roster.csv")},
+        content_type="multipart/form-data",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    assert "upload_error" in resp.headers["Location"]
+    rosters = db_module.list_rosters(db_module.get_workspace_by_token(token)["id"])
+    assert [r["title"] for r in rosters] == ["Sample Roster"]  # nothing new created
+
+
+def test_csv_upload_without_a_file_shows_an_error(client, studio):
+    token = _workspace_token(client)
+    resp = client.post(f"/w/{token}/rosters/upload", data={}, content_type="multipart/form-data", follow_redirects=False)
+    assert resp.status_code == 302
+    assert "upload_error" in resp.headers["Location"]

@@ -138,8 +138,29 @@ h1 { margin-top: 0; }
 h2 { font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0 0 0.6rem; }
 
 /* Rosters list */
-.new-roster-form { display: flex; gap: 0.5rem; margin-bottom: 1.25rem; }
-.new-roster-form input[type="text"] { padding: 0.5rem 0.7rem; border: 1px solid var(--border); border-radius: var(--radius); flex: 0 0 320px; }
+.intake { display: grid; grid-template-columns: minmax(0, 320px) minmax(0, 1fr); gap: 1.25rem; align-items: start; margin-bottom: 1.25rem; }
+@media (max-width: 700px) { .intake { grid-template-columns: 1fr; } }
+
+.new-roster-form { display: flex; gap: 0.5rem; }
+.new-roster-form input[type="text"] { padding: 0.5rem 0.7rem; border: 1px solid var(--border); border-radius: var(--radius); flex: 1 1 auto; min-width: 0; }
+
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  text-align: center;
+  padding: 0.9rem 1rem;
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  cursor: pointer;
+}
+.dropzone:hover, .dropzone.dragover { border-color: var(--accent); background: var(--accent-weak); }
+.dropzone-title { font-weight: 600; font-size: 0.9rem; }
+.dropzone-hint { font-size: 0.78rem; color: var(--muted); }
+.dropzone-hint a { color: var(--accent); }
 .rosters-table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .rosters-table th, .rosters-table td { text-align: left; padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--border); }
 .rosters-table a { color: var(--accent); text-decoration: none; font-weight: 600; }

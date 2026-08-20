@@ -8,12 +8,14 @@ Run locally:
 
 from __future__ import annotations
 
+import csv
+import io
 import secrets
 import sqlite3
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, abort, g, jsonify, redirect, render_template, request, url_for
+from flask import Flask, Response, abort, g, jsonify, redirect, render_template, request, url_for
 from pydantic import ValidationError
 
 import solver
@@ -96,6 +98,52 @@ def _players_to_records(players: list[PlayerIn]) -> list[db.PlayerRecord]:
     ]
 
 
+ROSTER_TEMPLATE_CSV = (
+    "name,available,experience,preferred_positions,secondary_positions,unwilling_positions\n"
+    "Wayne Gretzky,1,5,C,LW;RW,\n"
+    "Bobby Orr,1,5,LD;RD,,\n"
+)
+
+
+def _parse_positions(raw: str | None) -> list[str]:
+    return [p.strip().upper() for p in (raw or "").replace("|", ";").split(";") if p.strip()]
+
+
+def _parse_available(raw: str | None) -> int:
+    v = (raw or "").strip().lower()
+    if v in ("0", "false", "no", "n"):
+        return 0
+    return 1  # default: available, and any other/blank/unrecognized value
+
+
+def _players_from_csv_upload(text: str) -> list[db.PlayerRecord]:
+    """Best-effort CSV -> PlayerRecord: only `name` is required, everything
+    else falls back to a sensible default so users can fix it up by hand
+    afterward. Rows without a name and columns we don't recognize are
+    silently skipped/ignored rather than treated as errors."""
+    records: list[db.PlayerRecord] = []
+    for row in csv.DictReader(io.StringIO(text)):
+        name = (row.get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            experience = int((row.get("experience") or "").strip())
+        except ValueError:
+            experience = 1
+        records.append(
+            {
+                "player_key": f"P{len(records) + 1:02d}",
+                "name": name,
+                "available": _parse_available(row.get("available")),
+                "experience": experience,
+                "preferred_positions": _parse_positions(row.get("preferred_positions")),
+                "secondary_positions": _parse_positions(row.get("secondary_positions")),
+                "unwilling_positions": _parse_positions(row.get("unwilling_positions")),
+            }
+        )
+    return records
+
+
 def _parse_players(payload: Any) -> list[PlayerIn]:
     if not isinstance(payload, list):
         abort(400, description="players must be a list.")
@@ -137,7 +185,10 @@ def rosters_list():
     workspace = _require_workspace()
     rosters = db.list_rosters(workspace["id"])
     is_new_workspace = request.args.get("new") == "1"
-    return render_template("rosters_list.html", rosters=rosters, is_new_workspace=is_new_workspace)
+    upload_error = request.args.get("upload_error")
+    return render_template(
+        "rosters_list.html", rosters=rosters, is_new_workspace=is_new_workspace, upload_error=upload_error
+    )
 
 
 @app.post("/w/<token>/rosters/new")
@@ -148,6 +199,41 @@ def rosters_new():
         abort(400, description="title is required.")
     roster_id = db.create_roster(workspace["id"], title)
     return redirect(url_for("studio_view", roster_id=roster_id))
+
+
+@app.post("/w/<token>/rosters/upload")
+def rosters_upload():
+    workspace = _require_workspace()
+    file = request.files.get("file")
+    if file is None or not file.filename:
+        return redirect(url_for("rosters_list", upload_error="Choose a CSV file to upload."))
+
+    try:
+        text = file.read().decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return redirect(url_for("rosters_list", upload_error="That file isn't readable as text. Please upload a CSV."))
+
+    records = _players_from_csv_upload(text)
+    if not records:
+        return redirect(
+            url_for(
+                "rosters_list",
+                upload_error="No players found. The CSV needs a ‘name’ column with at least one value.",
+            )
+        )
+
+    title = Path(file.filename).stem.strip() or "Uploaded Roster"
+    roster_id = db.save_as_new_roster(workspace["id"], title, records)
+    return redirect(url_for("studio_view", roster_id=roster_id))
+
+
+@app.get("/roster-template.csv")
+def roster_template():
+    return Response(
+        ROSTER_TEMPLATE_CSV,
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=roster-template.csv"},
+    )
 
 
 @app.post("/w/<token>/rosters/<int:roster_id>/delete")
