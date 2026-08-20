@@ -24,6 +24,11 @@ POSITIONS = ["LW", "C", "RW", "LD", "RD"]
 WORKSPACE_COOKIE = "workspace_token"
 WORKSPACE_COOKIE_MAX_AGE = 60 * 60 * 24 * 400  # ~400 days, the browser-enforced ceiling
 
+# Probe cookie used to confirm cookies actually round-trip before minting a
+# workspace: without this, a browser with cookies blocked would mint (and
+# immediately orphan) a brand-new workspace on every single request to "/".
+COOKIE_CHECK_COOKIE = "cookie_check"
+
 # Throttle for minting new workspaces: without it, a script that never keeps
 # cookies could create unbounded rows just by hitting "/" in a loop.
 WORKSPACE_CREATE_LIMIT = 20
@@ -106,6 +111,13 @@ def index():
     workspace = db.get_workspace_by_token(token) if token else None
     if workspace is not None:
         return redirect(url_for("rosters_list", token=token))
+
+    if request.args.get("cc") != "1":
+        resp = redirect(url_for("index", cc="1"))
+        resp.set_cookie(COOKIE_CHECK_COOKIE, "1", max_age=300, httponly=True, samesite="Lax")
+        return resp
+    if request.cookies.get(COOKIE_CHECK_COOKIE) != "1":
+        return render_template("cookies_required.html"), 200
 
     client_ip = request.remote_addr or "unknown"
     recent = db.count_recent_workspaces_from_ip(client_ip, WORKSPACE_CREATE_WINDOW_SECONDS)

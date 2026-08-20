@@ -31,11 +31,13 @@ SMALL_PLAYERS = [
 
 
 def _workspace_token(client):
-    # Visiting "/" mints a workspace and redirects into it; the test client
-    # keeps the resulting cookie, so later bare requests reuse the same one.
-    resp = client.get("/", follow_redirects=False)
-    assert resp.status_code == 302
-    return resp.headers["Location"].rstrip("/").split("/w/", 1)[1].split("/", 1)[0]
+    # "/" does a cookie round-trip check before minting a workspace and
+    # redirecting into it; follow_redirects chases both hops like a browser
+    # would. The test client keeps cookies, so later bare requests reuse the
+    # same workspace.
+    resp = client.get("/", follow_redirects=True)
+    assert resp.status_code == 200
+    return resp.request.path.split("/w/", 1)[1].split("/", 1)[0]
 
 
 def _create_roster(client, title="Test Roster"):
@@ -168,9 +170,23 @@ def test_workspace_creation_is_rate_limited_per_ip(client, studio, monkeypatch):
 
     for _ in range(2):
         client.delete_cookie("workspace_token")
-        resp = client.get("/", follow_redirects=False)
-        assert resp.status_code == 302
+        _workspace_token(client)
 
     client.delete_cookie("workspace_token")
-    resp = client.get("/", follow_redirects=False)
+    resp = client.get("/", follow_redirects=True)
     assert resp.status_code == 429
+
+
+def test_blocked_cookies_get_a_helpful_page_instead_of_a_new_workspace_every_time(client, studio):
+    _, db_module = studio
+    resp = client.get("/", follow_redirects=False)
+    assert resp.status_code == 302  # sets the cookie-check cookie
+
+    client.delete_cookie("cookie_check")  # simulate a browser that never stored it
+    resp = client.get("/?cc=1", follow_redirects=False)
+    assert resp.status_code == 200
+    assert b"Cookies are blocked" in resp.data
+
+    with db_module.get_connection(db_module.DB_PATH) as conn:
+        count = conn.execute("SELECT COUNT(*) AS n FROM workspaces").fetchone()["n"]
+    assert count == 0
