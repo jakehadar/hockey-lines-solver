@@ -7,6 +7,7 @@
     <div class="title-group">
       <a class="back-link" href="{{ url_for('rosters_list') }}">&larr; Rosters</a>
       <input id="roster-title" type="text" value="{{ roster['title'] }}">
+      <span id="scenario-badge" class="badge scenario" title="This view has changes not yet saved to the roster" hidden>Scenario mode</span>
     </div>
     <div class="actions">
       <label class="switch">

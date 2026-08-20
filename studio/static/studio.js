@@ -16,6 +16,18 @@
   const bannerEl = document.getElementById("status-banner");
   const autoToggle = document.getElementById("auto-solve-toggle");
   const titleInput = document.getElementById("roster-title");
+  const resetBtn = document.getElementById("reset-btn");
+  const scenarioBadge = document.getElementById("scenario-badge");
+
+  function isDirty() {
+    return JSON.stringify(players) !== JSON.stringify(baseline);
+  }
+
+  function updateDirtyState() {
+    const dirty = isDirty();
+    resetBtn.disabled = !dirty;
+    scenarioBadge.hidden = !dirty;
+  }
 
   function nextId(prefix) {
     let max = 0;
@@ -165,6 +177,7 @@
     renderRoster();
     renderGrid();
     renderBanner();
+    updateDirtyState();
   }
 
   function scheduleSolve() {
@@ -217,6 +230,7 @@
       if (e.target.checked && at === -1) list.push(pos);
       if (!e.target.checked && at !== -1) list.splice(at, 1);
     }
+    updateDirtyState();
     scheduleSolve();
   });
 
@@ -285,6 +299,9 @@
   });
 
   document.getElementById("save-btn").addEventListener("click", async () => {
+    if (isDirty() && !confirm("Save will replace the saved roster with the version shown here. Continue?")) {
+      return;
+    }
     const resp = await fetch(STUDIO_BASE + "/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -292,6 +309,7 @@
     });
     if (resp.ok) {
       baseline = JSON.parse(JSON.stringify(players));
+      updateDirtyState();
     } else {
       alert("Save failed.");
     }

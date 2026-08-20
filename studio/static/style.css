@@ -180,6 +180,7 @@ button {
   font-size: 0.9rem;
 }
 button:hover { border-color: var(--accent); color: var(--accent); }
+button:disabled, button:disabled:hover { opacity: 0.45; cursor: not-allowed; border-color: var(--border); color: var(--muted); }
 #save-btn, #solve-now-btn { background: var(--accent); border-color: var(--accent); color: #fff; }
 #save-btn:hover, #solve-now-btn:hover { opacity: 0.9; color: #fff; }
 
@@ -234,6 +235,7 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 
 .badge { display: inline-block; font-size: 0.7rem; font-weight: 700; padding: 0.1rem 0.4rem; border-radius: 999px; background: var(--accent-weak); color: var(--accent); }
 .badge.alt { background: #fff2cc; color: #8a6d00; }
+.badge.scenario { background: #fff2cc; color: #8a6d00; text-transform: uppercase; letter-spacing: 0.03em; }
 .badge.status-primary { background: var(--ok-weak); color: var(--ok); }
 .badge.status-secondary { background: var(--accent-weak); color: var(--accent); }
 .badge.status-oop { background: var(--danger-weak); color: var(--danger); }
