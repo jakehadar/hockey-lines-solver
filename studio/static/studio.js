@@ -247,6 +247,7 @@
       optional_player_link: null,
     });
     render();
+    scheduleSolve();
   });
 
   document.getElementById("add-alt-btn").addEventListener("click", () => {
@@ -262,6 +263,7 @@
       optional_player_link: null,
     });
     render();
+    scheduleSolve();
   });
 
   document.getElementById("reset-btn").addEventListener("click", () => {
