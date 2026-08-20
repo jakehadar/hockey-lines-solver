@@ -158,8 +158,7 @@ relying on this in production.
 running interactive what-if scenarios against `solver.py` — a UI on top of
 the same solver core the CLI and `api.py` use (imported in-process, not over
 HTTP). It's an experimental first iteration; team/season/game-day concepts
-are intentionally out of scope, but multi-roster support is already there
-as the extension point for that later.
+are intentionally out of scope.
 
 Run it:
 
@@ -169,18 +168,35 @@ pip install -r requirements.txt
 python -m studio.app          # http://127.0.0.1:5000, SQLite at studio/instance/rosters.db
 ```
 
-Optionally seed a roster from an existing CSV to try it out:
+No signup: visiting `/` mints an anonymous **workspace** — a token in a
+long-lived cookie and in every URL under `/w/<token>/...` — and every roster
+and scenario is scoped to it, so one workspace can never see or touch
+another's. The token in the URL *is* the credential; anyone with the link
+has full read/write access to that workspace, same as a "anyone with the
+link can edit" share. The workspace-badge dropdown (top right) explains
+this and offers "Copy workspace link" to carry it to another device or hand
+it to someone else. New workspaces are pre-seeded with
+`rosters/sample_roster.csv` so there's something to explore immediately.
+
+Optionally seed an additional roster from a CSV yourself:
 
 ```bash
 python -m studio.seed --csv rosters/sample_roster.csv --title "Sample Roster"
+# --token <existing-workspace-token> to seed into a workspace you already have,
+# instead of minting a new one
 ```
 
 What it does:
-- **Rosters list** (`/rosters`) — create a blank roster (title only) or open an existing one.
-- **Studio page** (`/studio/<id>`) — one roster panel per player (availability, experience, preferred/secondary/**unwilling** positions, plus two scenario-only levers: a position override and a link-to-another-player), a live grid of the solved forward lines/defense pairs, and a summary panel (experience sums, primary/secondary/OOP counts). An infeasible combination shows a banner instead of a stale grid.
-- **Auto/manual solve toggle** — auto re-solves (debounced) after every edit; manual only solves on "Solve now".
-- **Persisted vs. scenario-only fields** — availability, experience, name, and preferred/secondary/**unwilling** positions round-trip to SQLite via **Save** (in place) or **Save As** (a new roster, for branching off a variant). The position override and player link are always ephemeral — never saved, always reset to "none" on load — by design, so they stay a cheap what-if lever.
-- **Reset** — discards every in-memory edit back to the roster as last loaded/saved, in case a scenario wanders into infeasibility.
+- **Rosters list** (`/w/<token>/rosters`) — create a blank roster (title only), or drag-and-drop/browse a CSV to import one directly (only `name` is required; every other column is optional and can be filled in by hand afterward — see the in-page template link for the exact columns).
+- **Studio page** (`/w/<token>/studio/<roster_id>`) — one roster panel per player (availability, experience, preferred/secondary/**unwilling** positions, plus two scenario-only levers: a position override and a link-to-another-player), a live grid of the solved forward lines/defense pairs, and a summary panel (experience sums, primary/secondary/OOP counts). An infeasible combination shows a banner instead of a stale grid.
+- **Auto/manual solve toggle** — auto re-solves (debounced) after every edit, including adding a player or alt; manual only solves on "Solve now".
+- **Scenario mode** — the moment the in-memory roster diverges from what's actually saved, a "Scenario mode" badge appears next to the title and **Reset** (discard back to the saved roster) becomes enabled; it's disabled the rest of the time since there'd be nothing to discard.
+- **Save** (the split button) has three destinations:
+  - **Save to roster** — overwrites the roster's saved baseline. Confirms first if there are unsaved changes, since there's no undo once it lands.
+  - **Save as new roster…** — forks the current state into an entirely new, independent roster.
+  - **Save as scenario…** — snapshots the current players, solve settings, and already-computed result under this roster for later comparison, without touching the saved roster at all. Titles auto-suggest sequentially ("Scenario 1", "Scenario 2", …); a description is optional.
+- **Scenarios** (`/w/<token>/studio/<roster_id>/scenarios`) — every saved scenario for a roster, plus an always-current **Baseline** entry that tracks the roster's own saved state (kept in sync every time you Save). Select several and **Compare** to see their cached results side by side (`/compare`) — no re-solving, since each scenario already carries the result it produced when saved. **Load…** on any named scenario (from the list or the compare view) reopens the editor with that scenario's players/settings restored, so you can branch from a past what-if instead of rebuilding it from memory; Reset is still there to get back to the real saved roster if the branch doesn't pan out.
 - **Alts** — "+ Add alt" creates a player flagged as not part of the core roster (`A##` id vs. the regular `P##`), pre-filled with all positions as preferred and experience 3 as a starting point. Alt-vs-full-time is fixed at creation; to change it, delete the row and add the other kind.
+- Deleting a roster deletes its scenarios too (warns first if there are any beyond the baseline).
 
 Tests: `pytest tests/test_studio.py -v` (uses Flask's test client with an isolated temp SQLite DB per test).
