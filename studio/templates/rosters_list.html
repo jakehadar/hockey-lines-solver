@@ -16,7 +16,7 @@
   <form method="post" action="{{ url_for('rosters_upload') }}" enctype="multipart/form-data" id="upload-form">
     <label class="dropzone" id="dropzone" for="csv-file">
       <span class="dropzone-title">Drop a roster CSV here, or click to browse</span>
-      <span class="dropzone-hint">Only “name” is required — everything else can be filled in by hand afterward. Unrecognized columns are ignored.</span>
+      <span class="dropzone-hint">Only “name” is required. Positions accept shortcuts — W, D, C, U, or combos like W/C — and rank is 1–5. Unrecognized columns are ignored.</span>
       <span class="dropzone-hint"><a href="{{ url_for('roster_template') }}">Download a template</a></span>
       <input type="file" id="csv-file" name="file" accept=".csv,text/csv" hidden>
     </label>

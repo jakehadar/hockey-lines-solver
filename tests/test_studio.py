@@ -193,22 +193,26 @@ def test_blocked_cookies_get_a_helpful_page_instead_of_a_new_workspace_every_tim
     assert count == 0
 
 
+def _upload_csv(client, token, csv_bytes, filename="My Team.csv"):
+    return client.post(
+        f"/w/{token}/rosters/upload",
+        data={"file": (io.BytesIO(csv_bytes), filename)},
+        content_type="multipart/form-data",
+        follow_redirects=False,
+    )
+
+
 def test_csv_upload_creates_a_roster_with_defaults_and_generated_ids(client, studio):
     _, db_module = studio
     token = _workspace_token(client)
 
     csv_bytes = (
-        b"name,available,experience,preferred_positions,unrelated_column\n"
-        b"Alice,,,LW;C,ignored\n"
-        b",1,3,RW,ignored\n"  # no name -> skipped
-        b"Bob,0,4,RD,ignored\n"
+        b"name,rank,preferred_positions,unrelated_column\n"
+        b"Alice,,LW;C,ignored\n"
+        b",3,RW,ignored\n"  # no name -> skipped
+        b"Bob,4,RD,ignored\n"
     )
-    resp = client.post(
-        f"/w/{token}/rosters/upload",
-        data={"file": (io.BytesIO(csv_bytes), "My Team.csv")},
-        content_type="multipart/form-data",
-        follow_redirects=False,
-    )
+    resp = _upload_csv(client, token, csv_bytes)
     assert resp.status_code == 302
     roster_id = int(resp.headers["Location"].rstrip("/").rsplit("/", 1)[-1])
 
@@ -220,14 +224,48 @@ def test_csv_upload_creates_a_roster_with_defaults_and_generated_ids(client, stu
 
     alice = next(p for p in players if p["name"] == "Alice")
     assert alice["player_key"] == "P01"
-    assert alice["available"] == 1  # blank -> defaulted
-    assert alice["experience"] == 1  # blank -> defaulted
+    assert alice["available"] == 1
+    assert alice["experience"] == 1  # blank rank -> defaulted
     assert alice["preferred_positions"] == "LW;C"
 
     bob = next(p for p in players if p["name"] == "Bob")
     assert bob["player_key"] == "P02"
-    assert bob["available"] == 0
+    assert bob["available"] == 1  # uploads are always available, regardless of the file
     assert bob["experience"] == 4
+
+
+def test_csv_upload_falls_back_to_an_experience_column_when_rank_is_absent(client, studio):
+    _, db_module = studio
+    token = _workspace_token(client)
+
+    resp = _upload_csv(client, token, b"name,experience\nAlice,5\n")
+    roster_id = int(resp.headers["Location"].rstrip("/").rsplit("/", 1)[-1])
+    assert db_module.list_players(roster_id)[0]["experience"] == 5
+
+
+def test_csv_upload_expands_position_shortcuts_and_slash_combos(client, studio):
+    _, db_module = studio
+    token = _workspace_token(client)
+
+    csv_bytes = (
+        b"name,preferred_positions\n"
+        b"Winger,W\n"
+        b"Dman,D\n"
+        b"Center,C\n"
+        b"Utility,U\n"
+        b"Hybrid,W/C\n"
+        b'MixedDelims,"LW,RW|C"\n'  # comma is a valid in-field delimiter, but must be quoted per CSV rules
+    )
+    resp = _upload_csv(client, token, csv_bytes)
+    roster_id = int(resp.headers["Location"].rstrip("/").rsplit("/", 1)[-1])
+    players = {p["name"]: p["preferred_positions"] for p in db_module.list_players(roster_id)}
+
+    assert players["Winger"] == "LW;RW"
+    assert players["Dman"] == "LD;RD"
+    assert players["Center"] == "C"
+    assert players["Utility"] == "LW;C;RW;LD;RD"
+    assert players["Hybrid"] == "LW;C;RW"
+    assert players["MixedDelims"] == "LW;C;RW"
 
 
 def test_csv_upload_without_a_name_column_shows_an_error_and_creates_nothing(client, studio):

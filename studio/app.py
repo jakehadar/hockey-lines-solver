@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 import secrets
 import sqlite3
 from pathlib import Path
@@ -99,43 +100,54 @@ def _players_to_records(players: list[PlayerIn]) -> list[db.PlayerRecord]:
 
 
 ROSTER_TEMPLATE_CSV = (
-    "name,available,experience,preferred_positions,secondary_positions,unwilling_positions\n"
-    "Wayne Gretzky,1,5,C,LW;RW,\n"
-    "Bobby Orr,1,5,LD;RD,,\n"
+    "name,preferred_positions,secondary_positions,unwilling_positions,rank\n"
+    "Wayne Gretzky,C,W,,5\n"
+    "Bobby Orr,D,,,5\n"
+    "Brent Burns,D/W,,,4\n"
 )
+
+# Shortcut symbols accepted in position fields, expanded to our internal
+# LW/C/RW/LD/RD codes. A field can combine several with any of ,;/| - e.g.
+# "W/C" expands and unions to LW, RW, C.
+POSITION_SHORTCUTS = {
+    "W": ["LW", "RW"],
+    "D": ["LD", "RD"],
+    "C": ["C"],
+    "U": ["LW", "RW", "C", "LD", "RD"],
+}
+POSITION_FIELD_DELIMITERS = re.compile(r"[,;/|]")
 
 
 def _parse_positions(raw: str | None) -> list[str]:
-    return [p.strip().upper() for p in (raw or "").replace("|", ";").split(";") if p.strip()]
-
-
-def _parse_available(raw: str | None) -> int:
-    v = (raw or "").strip().lower()
-    if v in ("0", "false", "no", "n"):
-        return 0
-    return 1  # default: available, and any other/blank/unrecognized value
+    tokens = [t.strip() for t in POSITION_FIELD_DELIMITERS.split((raw or "").upper()) if t.strip()]
+    expanded: set[str] = set()
+    for t in tokens:
+        expanded.update(POSITION_SHORTCUTS.get(t, [t]))
+    # Canonical position order first, then any unrecognized leftovers.
+    return [p for p in POSITIONS if p in expanded] + sorted(expanded - set(POSITIONS))
 
 
 def _players_from_csv_upload(text: str) -> list[db.PlayerRecord]:
     """Best-effort CSV -> PlayerRecord: only `name` is required, everything
     else falls back to a sensible default so users can fix it up by hand
     afterward. Rows without a name and columns we don't recognize are
-    silently skipped/ignored rather than treated as errors."""
+    silently skipped/ignored rather than treated as errors. Uploaded
+    rosters are always all-available; there's no "available" column."""
     records: list[db.PlayerRecord] = []
     for row in csv.DictReader(io.StringIO(text)):
         name = (row.get("name") or "").strip()
         if not name:
             continue
         try:
-            experience = int((row.get("experience") or "").strip())
+            rank = int((row.get("rank") or row.get("experience") or "").strip())
         except ValueError:
-            experience = 1
+            rank = 1
         records.append(
             {
                 "player_key": f"P{len(records) + 1:02d}",
                 "name": name,
-                "available": _parse_available(row.get("available")),
-                "experience": experience,
+                "available": 1,
+                "experience": rank,
                 "preferred_positions": _parse_positions(row.get("preferred_positions")),
                 "secondary_positions": _parse_positions(row.get("secondary_positions")),
                 "unwilling_positions": _parse_positions(row.get("unwilling_positions")),
