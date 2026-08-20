@@ -62,24 +62,41 @@ def init_db(db_path: Path | None = None) -> None:
         conn.executescript(SCHEMA_PATH.read_text())
 
 
-def list_rosters(db_path: Path | None = None) -> List[sqlite3.Row]:
+def create_workspace(token: str, db_path: Path | None = None) -> int:
     with get_connection(db_path) as conn:
-        return conn.execute("SELECT id, title, created_at FROM rosters ORDER BY created_at DESC").fetchall()
+        cur = conn.execute("INSERT INTO workspaces (token) VALUES (?)", (token,))
+        return cur.lastrowid
 
 
-def get_roster(roster_id: int, db_path: Path | None = None) -> sqlite3.Row | None:
+def get_workspace_by_token(token: str, db_path: Path | None = None) -> sqlite3.Row | None:
     with get_connection(db_path) as conn:
-        return conn.execute("SELECT id, title, created_at FROM rosters WHERE id = ?", (roster_id,)).fetchone()
+        return conn.execute("SELECT id, token, created_at FROM workspaces WHERE token = ?", (token,)).fetchone()
 
 
-def delete_roster(roster_id: int, db_path: Path | None = None) -> None:
+def list_rosters(workspace_id: int, db_path: Path | None = None) -> List[sqlite3.Row]:
     with get_connection(db_path) as conn:
-        conn.execute("DELETE FROM rosters WHERE id = ?", (roster_id,))
+        return conn.execute(
+            "SELECT id, title, created_at FROM rosters WHERE workspace_id = ? ORDER BY created_at DESC",
+            (workspace_id,),
+        ).fetchall()
 
 
-def create_roster(title: str, db_path: Path | None = None) -> int:
+def get_roster(roster_id: int, workspace_id: int, db_path: Path | None = None) -> sqlite3.Row | None:
     with get_connection(db_path) as conn:
-        cur = conn.execute("INSERT INTO rosters (title) VALUES (?)", (title,))
+        return conn.execute(
+            "SELECT id, title, created_at FROM rosters WHERE id = ? AND workspace_id = ?",
+            (roster_id, workspace_id),
+        ).fetchone()
+
+
+def delete_roster(roster_id: int, workspace_id: int, db_path: Path | None = None) -> None:
+    with get_connection(db_path) as conn:
+        conn.execute("DELETE FROM rosters WHERE id = ? AND workspace_id = ?", (roster_id, workspace_id))
+
+
+def create_roster(workspace_id: int, title: str, db_path: Path | None = None) -> int:
+    with get_connection(db_path) as conn:
+        cur = conn.execute("INSERT INTO rosters (workspace_id, title) VALUES (?, ?)", (workspace_id, title))
         return cur.lastrowid
 
 
@@ -120,9 +137,11 @@ def replace_players(roster_id: int, players: List[PlayerRecord], db_path: Path |
         _insert_players(conn, roster_id, players)
 
 
-def save_as_new_roster(title: str, players: List[PlayerRecord], db_path: Path | None = None) -> int:
+def save_as_new_roster(
+    workspace_id: int, title: str, players: List[PlayerRecord], db_path: Path | None = None
+) -> int:
     with get_connection(db_path) as conn:
-        cur = conn.execute("INSERT INTO rosters (title) VALUES (?)", (title,))
+        cur = conn.execute("INSERT INTO rosters (workspace_id, title) VALUES (?, ?)", (workspace_id, title))
         roster_id = cur.lastrowid
         _insert_players(conn, roster_id, players)
         return roster_id

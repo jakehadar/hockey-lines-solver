@@ -3,6 +3,7 @@
 
   const ROSTER_ID = window.ROSTER_ID;
   const POSITIONS = window.POSITIONS;
+  const STUDIO_BASE = "/w/" + window.WORKSPACE_TOKEN + "/studio/" + ROSTER_ID;
 
   let players = JSON.parse(JSON.stringify(window.INITIAL_ROSTER));
   let baseline = JSON.parse(JSON.stringify(window.INITIAL_ROSTER));
@@ -176,7 +177,7 @@
     const forwards = parseInt(document.getElementById("setting-forwards").value, 10) || 0;
     const defense = parseInt(document.getElementById("setting-defense").value, 10) || 0;
     const timeLimit = parseInt(document.getElementById("setting-time-limit").value, 10) || 5;
-    const resp = await fetch("/studio/" + ROSTER_ID + "/solve", {
+    const resp = await fetch(STUDIO_BASE + "/solve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ players: players, forwards: forwards, defense: defense, time_limit: timeLimit }),
@@ -282,7 +283,7 @@
   });
 
   document.getElementById("save-btn").addEventListener("click", async () => {
-    const resp = await fetch("/studio/" + ROSTER_ID + "/save", {
+    const resp = await fetch(STUDIO_BASE + "/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ players: players }),
@@ -297,14 +298,14 @@
   document.getElementById("save-as-btn").addEventListener("click", async () => {
     const title = prompt("Title for the new roster:", titleInput.value + " (copy)");
     if (!title) return;
-    const resp = await fetch("/studio/" + ROSTER_ID + "/save-as", {
+    const resp = await fetch(STUDIO_BASE + "/save-as", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: title, players: players }),
     });
     if (resp.ok) {
       const data = await resp.json();
-      window.location = "/studio/" + data.roster_id;
+      window.location = "/w/" + window.WORKSPACE_TOKEN + "/studio/" + data.roster_id;
     } else {
       alert("Save As failed.");
     }

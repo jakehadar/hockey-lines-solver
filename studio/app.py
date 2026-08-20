@@ -8,10 +8,11 @@ Run locally:
 
 from __future__ import annotations
 
+import secrets
 import sqlite3
 from typing import Any
 
-from flask import Flask, abort, jsonify, redirect, render_template, request, url_for
+from flask import Flask, abort, g, jsonify, redirect, render_template, request, url_for
 from pydantic import ValidationError
 
 import solver
@@ -19,8 +20,32 @@ from schemas import PlayerIn, SolveRequest
 from studio import db
 
 POSITIONS = ["LW", "C", "RW", "LD", "RD"]
+WORKSPACE_COOKIE = "workspace_token"
+WORKSPACE_COOKIE_MAX_AGE = 60 * 60 * 24 * 400  # ~400 days, the browser-enforced ceiling
 
 app = Flask(__name__)
+
+
+@app.url_value_preprocessor
+def _pull_workspace_token(endpoint: str | None, values: dict[str, Any] | None) -> None:
+    if values is not None:
+        g.workspace_token = values.pop("token", None)
+
+
+@app.url_defaults
+def _inject_workspace_token(endpoint: str, values: dict[str, Any]) -> None:
+    if "token" in values or not getattr(g, "workspace_token", None):
+        return
+    if app.url_map.is_endpoint_expecting(endpoint, "token"):
+        values["token"] = g.workspace_token
+
+
+def _require_workspace() -> sqlite3.Row:
+    token = getattr(g, "workspace_token", None)
+    workspace = db.get_workspace_by_token(token) if token else None
+    if workspace is None:
+        abort(404, description="Workspace not found. Check the link, or start a new workspace from the home page.")
+    return workspace
 
 
 def _row_to_player_in_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -63,35 +88,49 @@ def _parse_players(payload: Any) -> list[PlayerIn]:
 
 @app.get("/")
 def index():
-    return redirect(url_for("rosters_list"))
+    token = request.cookies.get(WORKSPACE_COOKIE)
+    workspace = db.get_workspace_by_token(token) if token else None
+    if workspace is not None:
+        return redirect(url_for("rosters_list", token=token))
+
+    token = secrets.token_urlsafe(16)
+    db.create_workspace(token)
+    resp = redirect(url_for("rosters_list", token=token, new="1"))
+    resp.set_cookie(WORKSPACE_COOKIE, token, max_age=WORKSPACE_COOKIE_MAX_AGE, httponly=True, samesite="Lax")
+    return resp
 
 
-@app.get("/rosters")
+@app.get("/w/<token>/rosters")
 def rosters_list():
-    rosters = db.list_rosters()
-    return render_template("rosters_list.html", rosters=rosters)
+    workspace = _require_workspace()
+    rosters = db.list_rosters(workspace["id"])
+    is_new_workspace = request.args.get("new") == "1"
+    return render_template("rosters_list.html", rosters=rosters, is_new_workspace=is_new_workspace)
 
 
-@app.post("/rosters/new")
+@app.post("/w/<token>/rosters/new")
 def rosters_new():
+    workspace = _require_workspace()
     title = (request.form.get("title") or "").strip()
     if not title:
         abort(400, description="title is required.")
-    roster_id = db.create_roster(title)
+    roster_id = db.create_roster(workspace["id"], title)
     return redirect(url_for("studio_view", roster_id=roster_id))
 
 
-@app.post("/rosters/<int:roster_id>/delete")
+@app.post("/w/<token>/rosters/<int:roster_id>/delete")
 def rosters_delete(roster_id: int):
-    if db.get_roster(roster_id) is None:
+    workspace = _require_workspace()
+    if db.get_roster(roster_id, workspace["id"]) is None:
         abort(404)
-    db.delete_roster(roster_id)
+    db.delete_roster(roster_id, workspace["id"])
     return redirect(url_for("rosters_list"))
 
 
-@app.get("/studio/<int:roster_id>")
+@app.get("/w/<token>/studio/<int:roster_id>")
 def studio_view(roster_id: int):
-    roster = db.get_roster(roster_id)
+    workspace = _require_workspace()
+    roster = db.get_roster(roster_id, workspace["id"])
     if roster is None:
         abort(404)
     players = [_row_to_player_in_dict(r) for r in db.list_players(roster_id)]
@@ -103,9 +142,10 @@ def studio_view(roster_id: int):
     )
 
 
-@app.post("/studio/<int:roster_id>/solve")
+@app.post("/w/<token>/studio/<int:roster_id>/solve")
 def studio_solve(roster_id: int):
-    if db.get_roster(roster_id) is None:
+    workspace = _require_workspace()
+    if db.get_roster(roster_id, workspace["id"]) is None:
         abort(404)
     body = request.get_json(silent=True) or {}
     try:
@@ -119,9 +159,10 @@ def studio_solve(roster_id: int):
     return jsonify(result.model_dump())
 
 
-@app.post("/studio/<int:roster_id>/save")
+@app.post("/w/<token>/studio/<int:roster_id>/save")
 def studio_save(roster_id: int):
-    if db.get_roster(roster_id) is None:
+    workspace = _require_workspace()
+    if db.get_roster(roster_id, workspace["id"]) is None:
         abort(404)
     body = request.get_json(silent=True) or {}
     players = _parse_players(body.get("players"))
@@ -129,16 +170,17 @@ def studio_save(roster_id: int):
     return jsonify({"roster_id": roster_id})
 
 
-@app.post("/studio/<int:roster_id>/save-as")
+@app.post("/w/<token>/studio/<int:roster_id>/save-as")
 def studio_save_as(roster_id: int):
-    if db.get_roster(roster_id) is None:
+    workspace = _require_workspace()
+    if db.get_roster(roster_id, workspace["id"]) is None:
         abort(404)
     body = request.get_json(silent=True) or {}
     title = (body.get("title") or "").strip()
     if not title:
         abort(400, description="title is required.")
     players = _parse_players(body.get("players"))
-    new_roster_id = db.save_as_new_roster(title, _players_to_records(players))
+    new_roster_id = db.save_as_new_roster(workspace["id"], title, _players_to_records(players))
     return jsonify({"roster_id": new_roster_id})
 
 
