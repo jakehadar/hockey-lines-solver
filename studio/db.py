@@ -62,24 +62,50 @@ def init_db(db_path: Path | None = None) -> None:
         conn.executescript(SCHEMA_PATH.read_text())
 
 
-def list_rosters(db_path: Path | None = None) -> List[sqlite3.Row]:
+def create_workspace(token: str, client_ip: str | None = None, db_path: Path | None = None) -> int:
     with get_connection(db_path) as conn:
-        return conn.execute("SELECT id, title, created_at FROM rosters ORDER BY created_at DESC").fetchall()
+        cur = conn.execute("INSERT INTO workspaces (token, client_ip) VALUES (?, ?)", (token, client_ip))
+        return cur.lastrowid
 
 
-def get_roster(roster_id: int, db_path: Path | None = None) -> sqlite3.Row | None:
+def get_workspace_by_token(token: str, db_path: Path | None = None) -> sqlite3.Row | None:
     with get_connection(db_path) as conn:
-        return conn.execute("SELECT id, title, created_at FROM rosters WHERE id = ?", (roster_id,)).fetchone()
+        return conn.execute("SELECT id, token, created_at FROM workspaces WHERE token = ?", (token,)).fetchone()
 
 
-def delete_roster(roster_id: int, db_path: Path | None = None) -> None:
+def count_recent_workspaces_from_ip(client_ip: str, window_seconds: int, db_path: Path | None = None) -> int:
     with get_connection(db_path) as conn:
-        conn.execute("DELETE FROM rosters WHERE id = ?", (roster_id,))
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM workspaces WHERE client_ip = ? AND created_at >= datetime('now', ?)",
+            (client_ip, f"-{window_seconds} seconds"),
+        ).fetchone()
+        return row["n"]
 
 
-def create_roster(title: str, db_path: Path | None = None) -> int:
+def list_rosters(workspace_id: int, db_path: Path | None = None) -> List[sqlite3.Row]:
     with get_connection(db_path) as conn:
-        cur = conn.execute("INSERT INTO rosters (title) VALUES (?)", (title,))
+        return conn.execute(
+            "SELECT id, title, created_at FROM rosters WHERE workspace_id = ? ORDER BY created_at DESC",
+            (workspace_id,),
+        ).fetchall()
+
+
+def get_roster(roster_id: int, workspace_id: int, db_path: Path | None = None) -> sqlite3.Row | None:
+    with get_connection(db_path) as conn:
+        return conn.execute(
+            "SELECT id, title, created_at FROM rosters WHERE id = ? AND workspace_id = ?",
+            (roster_id, workspace_id),
+        ).fetchone()
+
+
+def delete_roster(roster_id: int, workspace_id: int, db_path: Path | None = None) -> None:
+    with get_connection(db_path) as conn:
+        conn.execute("DELETE FROM rosters WHERE id = ? AND workspace_id = ?", (roster_id, workspace_id))
+
+
+def create_roster(workspace_id: int, title: str, db_path: Path | None = None) -> int:
+    with get_connection(db_path) as conn:
+        cur = conn.execute("INSERT INTO rosters (workspace_id, title) VALUES (?, ?)", (workspace_id, title))
         return cur.lastrowid
 
 
@@ -120,9 +146,27 @@ def replace_players(roster_id: int, players: List[PlayerRecord], db_path: Path |
         _insert_players(conn, roster_id, players)
 
 
-def save_as_new_roster(title: str, players: List[PlayerRecord], db_path: Path | None = None) -> int:
+def player_records_from_players(players: Iterable) -> List[PlayerRecord]:
+    """Convert solver.Player objects (e.g. from solver.read_roster) to PlayerRecords."""
+    return [
+        {
+            "player_key": p.id,
+            "name": p.name,
+            "available": p.available,
+            "experience": p.experience,
+            "preferred_positions": p.prefs,
+            "secondary_positions": p.secondary,
+            "unwilling_positions": p.unwilling,
+        }
+        for p in players
+    ]
+
+
+def save_as_new_roster(
+    workspace_id: int, title: str, players: List[PlayerRecord], db_path: Path | None = None
+) -> int:
     with get_connection(db_path) as conn:
-        cur = conn.execute("INSERT INTO rosters (title) VALUES (?)", (title,))
+        cur = conn.execute("INSERT INTO rosters (workspace_id, title) VALUES (?, ?)", (workspace_id, title))
         roster_id = cur.lastrowid
         _insert_players(conn, roster_id, players)
         return roster_id
