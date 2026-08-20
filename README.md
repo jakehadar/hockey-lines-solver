@@ -1,6 +1,12 @@
 # Hockey Lines Solver
 
-Simple CP-SAT based solver to assign players to hockey forward lines and defensive pairs.
+A constraint solver for building hockey forward lines and defense pairs — built around the puzzle that actually comes up: *if I try player A and B on positions X and Y, given that C and D just dropped and alt E is filling in, where does everyone else need to move so the lines stay balanced and nobody ends up on a position they can't play?*
+
+That's the real use case: players dropping last second, someone wanting to try a new position, a captain wanting to test two players on the same line, a night where only two people can play center, half the defense being out and needing to know which forwards can slide back. Instead of re-deriving the whole lineup by hand every time something changes, you feed in the change and get a constraint-reasonable starting point to build from.
+
+It's not meant to replace a captain's judgment, discussion, or feel for the team — it's here to assist and sanity-check, not decide. It gets you to a feasible starting point around an unexpected event or an idea you want to validate, and you take it from there.
+
+Because it's reasoning over constraints rather than judging talent, it also scales past a single team: if every captain in a division uses it, they can simulate trades against their own roster and see the effect on balance and degree of constraint before making one for real.
 
 Files added:
 - `solver.py` - the main solver script (uses OR-Tools CP-SAT)
