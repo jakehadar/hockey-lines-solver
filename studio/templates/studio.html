@@ -75,6 +75,8 @@
         <label>Forwards <input id="setting-forwards" type="number" min="0" value="3"></label>
         <label>Defense <input id="setting-defense" type="number" min="0" value="3"></label>
         <label>Time limit (s) <input id="setting-time-limit" type="number" min="1" value="5"></label>
+        <label title="If off, a position a player neither prefers nor lists as secondary can't be used to fill a slot at all - takes precedence over Override.">Allow OOP <input id="setting-allow-oop" type="checkbox" checked></label>
+        <label title="If on, Override may force a player onto a position they marked unwilling. Off by default - unwilling is a stronger signal than an untagged position, so this needs explicit opt-in.">Allow Unwilling <input id="setting-allow-unwilling" type="checkbox"></label>
       </div>
       <table class="roster-table">
         <thead>

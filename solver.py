@@ -137,7 +137,14 @@ def build_slots(num_forwards_used: int, num_def_pairs_used: int, last_pair_parti
     return slots, forward_slot_names
 
 
-def solve_lines(players: List[Player], num_forwards_requested: int, num_defense_requested: int, time_limit: int) -> SolveResponse:
+def solve_lines(
+    players: List[Player],
+    num_forwards_requested: int,
+    num_defense_requested: int,
+    time_limit: int,
+    allow_oop: bool = True,
+    allow_unwilling: bool = False,
+) -> SolveResponse:
     available_count = sum(1 for p in players if p.available == 1)
 
     # Prioritize full forward lines: use as many full forward lines (3 players) as possible
@@ -202,6 +209,35 @@ def solve_lines(players: List[Player], num_forwards_requested: int, num_defense_
         elif p.unwilling:
             for s_name, s_pos in slots:
                 if s_pos in p.unwilling:
+                    model.Add(x[(p.id, s_name)] == 0)
+
+    # allow_unwilling: the mirror image of allow_oop, but for the unwilling
+    # axis - when False (the default), a position a player marked unwilling
+    # is forbidden outright, even via optional_position_override. That's a
+    # real behavior change from this app's history (an override into an
+    # unwilling position was always honored unconditionally before this
+    # existed) - defaulting to False here is a deliberate choice that
+    # unwilling is a stronger signal than an untagged ("oop") position,
+    # worth requiring an explicit opt-in to override.
+    if not allow_unwilling:
+        for p in players:
+            for s_name, s_pos in slots:
+                if s_pos in p.unwilling:
+                    model.Add(x[(p.id, s_name)] == 0)
+
+    # allow_oop: when False, a position that's neither preferred, secondary,
+    # nor unwilling for a player (i.e. one they simply never ranked) is
+    # forbidden outright, not just deprioritized. Applied unconditionally -
+    # including to players with an override - so it takes precedence over
+    # optional_position_override too: an override to a position the player
+    # never ranked at all directly contradicts this constraint on that same
+    # variable, and the solve goes infeasible rather than silently honoring
+    # the override. An override to an *unwilling* position is a separate,
+    # unaffected axis - this only ever touches the truly-untagged case.
+    if not allow_oop:
+        for p in players:
+            for s_name, s_pos in slots:
+                if s_pos not in p.prefs and s_pos not in p.secondary and s_pos not in p.unwilling:
                     model.Add(x[(p.id, s_name)] == 0)
 
     # optional_player_link: force linked players onto the same forward line or
@@ -442,10 +478,27 @@ def main():
     ap.add_argument("--forwards", type=int, default=3, help="Requested number of forward lines")
     ap.add_argument("--defense", type=int, default=3, help="Requested number of defensive pairs")
     ap.add_argument("--time-limit", type=int, default=20, help="Solver time limit in seconds")
+    ap.add_argument(
+        "--no-allow-oop",
+        dest="allow_oop",
+        action="store_false",
+        default=True,
+        help="Forbid assigning a player to a position they neither prefer nor listed as secondary (default: allowed)",
+    )
+    ap.add_argument(
+        "--allow-unwilling",
+        dest="allow_unwilling",
+        action="store_true",
+        default=False,
+        help="Allow optional_position_override to force a player onto a position they marked unwilling (default: forbidden)",
+    )
     args = ap.parse_args()
 
     players = read_roster(args.roster)
-    result = solve_lines(players, args.forwards, args.defense, args.time_limit)
+    result = solve_lines(
+        players, args.forwards, args.defense, args.time_limit,
+        allow_oop=args.allow_oop, allow_unwilling=args.allow_unwilling,
+    )
     print_solve_result(result)
 
 

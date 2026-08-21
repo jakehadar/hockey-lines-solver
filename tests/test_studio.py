@@ -115,6 +115,52 @@ def test_solve_endpoint_is_stateless(client):
     assert body["summary"]["total_primary"] == 3
 
 
+def test_solve_endpoint_allow_oop_false_forbids_an_untagged_assignment(client):
+    # Nobody prefers/lists RW as secondary, and exactly 3 players for 3
+    # slots - allow_oop=True (the default) must fill RW anyway (OOP);
+    # allow_oop=False for the identical roster must go infeasible instead.
+    token, roster_id = _create_roster(client)
+    players = [
+        {"id": "P1", "name": "A", "available": 1, "experience": 3, "preferred_positions": ["C"], "secondary_positions": []},
+        {"id": "P2", "name": "B", "available": 1, "experience": 3, "preferred_positions": ["C"], "secondary_positions": []},
+        {"id": "P3", "name": "C", "available": 1, "experience": 3, "preferred_positions": ["LW"], "secondary_positions": []},
+    ]
+    resp_allowed = client.post(
+        f"/w/{token}/studio/{roster_id}/solve",
+        json={"players": players, "forwards": 1, "defense": 0, "time_limit": 5, "allow_oop": True},
+    )
+    assert resp_allowed.get_json()["status"] in ("OPTIMAL", "FEASIBLE")
+
+    resp_forbidden = client.post(
+        f"/w/{token}/studio/{roster_id}/solve",
+        json={"players": players, "forwards": 1, "defense": 0, "time_limit": 5, "allow_oop": False},
+    )
+    assert resp_forbidden.get_json()["status"] == "NO_SOLUTION"
+
+
+def test_solve_endpoint_allow_unwilling_defaults_to_false(client):
+    # P1 is overridden onto C, which it marked unwilling - omitting
+    # allow_unwilling entirely must behave the same as allow_unwilling=False
+    # (the documented default), not silently allow it through.
+    token, roster_id = _create_roster(client)
+    players = [
+        {"id": "P1", "name": "A", "available": 1, "experience": 3, "preferred_positions": ["LW"], "secondary_positions": [], "unwilling_positions": ["C"], "optional_position_override": "C"},
+        {"id": "P2", "name": "B", "available": 1, "experience": 3, "preferred_positions": ["C"], "secondary_positions": []},
+        {"id": "P3", "name": "C", "available": 1, "experience": 3, "preferred_positions": ["RW"], "secondary_positions": []},
+    ]
+    resp_default = client.post(
+        f"/w/{token}/studio/{roster_id}/solve",
+        json={"players": players, "forwards": 1, "defense": 0, "time_limit": 5},
+    )
+    assert resp_default.get_json()["status"] == "NO_SOLUTION"
+
+    resp_allowed = client.post(
+        f"/w/{token}/studio/{roster_id}/solve",
+        json={"players": players, "forwards": 1, "defense": 0, "time_limit": 5, "allow_unwilling": True},
+    )
+    assert resp_allowed.get_json()["status"] in ("OPTIMAL", "FEASIBLE")
+
+
 def test_degrees_of_freedom_endpoint_reports_zero_flexibility_for_an_exactly_sized_roster(client):
     # 3 players, 1 forward line (3 slots) - every player is already needed
     # just to fill the line, so there's no room for any substitution.
@@ -147,6 +193,30 @@ def test_degrees_of_freedom_endpoint_reports_no_solution_when_baseline_is_infeas
     )
     assert resp.status_code == 200
     assert resp.get_json() == {"status": "NO_SOLUTION"}
+
+
+def test_degrees_of_freedom_cancel_endpoint_is_a_harmless_noop_for_an_unknown_job(client):
+    token, roster_id = _create_roster(client)
+    resp = client.post(
+        f"/w/{token}/studio/{roster_id}/degrees-of-freedom/cancel",
+        json={"job_id": "not-a-real-job"},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True}
+
+
+def test_degrees_of_freedom_endpoint_cleans_up_its_job_registry_entry(client):
+    import dof as dof_module
+
+    token, roster_id = _create_roster(client)
+    resp = client.post(
+        f"/w/{token}/studio/{roster_id}/degrees-of-freedom",
+        json={"players": SMALL_PLAYERS, "forwards": 1, "defense": 0, "time_limit": 5, "job_id": "test-job-1"},
+    )
+    assert resp.status_code == 200
+    # The job must not linger in the registry after the request completes -
+    # otherwise a stale entry would grow unbounded over the app's uptime.
+    assert "test-job-1" not in dof_module._jobs
 
 
 def test_save_persists_unwilling_positions_but_not_ephemeral_fields(client, studio):
@@ -476,7 +546,7 @@ def _fake_dof():
     }
 
 
-def _create_scenario(client, token, roster_id, title="Scenario 1", description="", players=None, result=None, dof=None):
+def _create_scenario(client, token, roster_id, title="Scenario 1", description="", players=None, result=None, dof=None, allow_oop=True, allow_unwilling=False):
     return client.post(
         f"/w/{token}/studio/{roster_id}/scenarios",
         json={
@@ -488,6 +558,8 @@ def _create_scenario(client, token, roster_id, title="Scenario 1", description="
             "time_limit": 5,
             "result": result or _fake_result(),
             "dof": dof,
+            "allow_oop": allow_oop,
+            "allow_unwilling": allow_unwilling,
         },
     )
 
@@ -541,6 +613,51 @@ def test_scenario_dof_analysis_round_trips_through_create_view_and_compare(clien
     studio_body = client.get(f"/w/{token}/studio/{roster_id}?load_scenario={scenario_id}").get_data(as_text=True)
     loaded = _extract_json_var(studio_body, "LOADED_SCENARIO")
     assert loaded["dof"] == _fake_dof()
+
+
+def test_scenario_allow_oop_round_trips_through_create_view_and_compare(client, studio):
+    _, db_module = studio
+    token, roster_id = _create_roster(client)
+
+    resp = _create_scenario(client, token, roster_id, title="No OOP", allow_oop=False)
+    scenario_id = resp.get_json()["scenario_id"]
+
+    scenario = db_module.get_scenario(scenario_id, roster_id)
+    assert scenario["allow_oop"] == 0
+
+    compare_body = client.get(f"/w/{token}/studio/{roster_id}/compare?ids={scenario_id}").get_data(as_text=True)
+    assert _extract_json_var(compare_body, "SCENARIOS")[0]["allow_oop"] is False
+
+    studio_body = client.get(f"/w/{token}/studio/{roster_id}?load_scenario={scenario_id}").get_data(as_text=True)
+    assert _extract_json_var(studio_body, "LOADED_SCENARIO")["allow_oop"] is False
+
+    # A scenario saved before this column existed (or just never touching
+    # the toggle) must still default to the historical behavior: OOP allowed.
+    default_id = _create_scenario(client, token, roster_id, title="Default").get_json()["scenario_id"]
+    assert db_module.get_scenario(default_id, roster_id)["allow_oop"] == 1
+
+
+def test_scenario_allow_unwilling_round_trips_through_create_view_and_compare(client, studio):
+    _, db_module = studio
+    token, roster_id = _create_roster(client)
+
+    resp = _create_scenario(client, token, roster_id, title="Unwilling OK", allow_unwilling=True)
+    scenario_id = resp.get_json()["scenario_id"]
+
+    scenario = db_module.get_scenario(scenario_id, roster_id)
+    assert scenario["allow_unwilling"] == 1
+
+    compare_body = client.get(f"/w/{token}/studio/{roster_id}/compare?ids={scenario_id}").get_data(as_text=True)
+    assert _extract_json_var(compare_body, "SCENARIOS")[0]["allow_unwilling"] is True
+
+    studio_body = client.get(f"/w/{token}/studio/{roster_id}?load_scenario={scenario_id}").get_data(as_text=True)
+    assert _extract_json_var(studio_body, "LOADED_SCENARIO")["allow_unwilling"] is True
+
+    # Opposite of allow_oop's default: a scenario that never touches this
+    # toggle must default to *forbidding* an override into an unwilling
+    # position, not allowing it.
+    default_id = _create_scenario(client, token, roster_id, title="Default").get_json()["scenario_id"]
+    assert db_module.get_scenario(default_id, roster_id)["allow_unwilling"] == 0
 
 
 def test_scenario_without_a_dof_analysis_omits_it_everywhere(client, studio):

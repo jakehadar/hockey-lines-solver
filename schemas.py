@@ -39,6 +39,23 @@ class SolveRequest(BaseModel):
     forwards: int = Field(3, ge=0, description="Requested number of forward lines.")
     defense: int = Field(3, ge=0, description="Requested number of defensive pairs.")
     time_limit: int = Field(20, ge=1, description="Solver time limit in seconds.")
+    allow_oop: bool = Field(
+        True,
+        description=(
+            "If False, a position that's neither a player's preferred, secondary, nor unwilling "
+            "(i.e. one they never ranked at all) is forbidden outright rather than just deprioritized - "
+            "takes precedence over optional_position_override, so an override to such a position makes "
+            "the solve infeasible instead of being honored."
+        ),
+    )
+    allow_unwilling: bool = Field(
+        False,
+        description=(
+            "If True, optional_position_override may force a player onto a position they marked "
+            "unwilling to play. Defaults to False, unlike allow_oop's True default - unwilling is a "
+            "stronger signal than an untagged position, so overriding it requires explicit opt-in."
+        ),
+    )
 
 
 class SlotAssignment(BaseModel):

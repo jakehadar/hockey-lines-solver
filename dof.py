@@ -37,14 +37,46 @@ run it directly against a roster CSV to see how it performs on real data:
 from __future__ import annotations
 
 import argparse
+import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import solver
 from schemas import SolveResponse
+
+# Phase 1 cancellation: an in-process registry mapping a client-supplied job
+# id to the Event that stops it. Deliberately simple (no external store) -
+# this app runs as a single persistent process (see studio/app.py), where a
+# plain in-memory dict is sufficient. It would NOT survive a move to a
+# multi-instance/serverless deployment, where the cancelling request has no
+# guarantee of reaching the same process that's running the original job -
+# that would need shared external state (e.g. Redis) instead.
+_jobs_lock = threading.Lock()
+_jobs: Dict[str, threading.Event] = {}
+
+
+def register_job(job_id: str) -> threading.Event:
+    event = threading.Event()
+    with _jobs_lock:
+        _jobs[job_id] = event
+    return event
+
+
+def cancel_job(job_id: str) -> bool:
+    with _jobs_lock:
+        event = _jobs.get(job_id)
+    if event is None:
+        return False  # already finished, or never existed - fine either way
+    event.set()
+    return True
+
+
+def unregister_job(job_id: str) -> None:
+    with _jobs_lock:
+        _jobs.pop(job_id, None)
 
 
 @dataclass
@@ -101,11 +133,30 @@ def _check_candidate(
     num_defense_requested: int,
     time_limit: int,
     baseline_key: Tuple[int, int],
+    allow_oop: bool = True,
+    allow_unwilling: bool = False,
+    cancel_event: Optional[threading.Event] = None,
 ) -> bool:
+    # ThreadPoolExecutor.submit() doesn't block, so by the time a cancel
+    # signal can arrive, every candidate for this batch has typically
+    # already been *submitted* (queued) regardless - checking only in the
+    # submission loop wouldn't actually stop anything for a realistic batch
+    # size. Checking here, at the start of each worker's task, is what
+    # actually skips still-queued (not yet started) work once cancelled.
+    if cancel_event is not None and cancel_event.is_set():
+        return False
     trial_players = [
         replace(p, position_override=position) if p.id == candidate_id else p for p in players
     ]
-    resp = solver.solve_lines(trial_players, num_forwards_requested, num_defense_requested, time_limit)
+    # allow_oop=False forbidding an untagged position, or allow_unwilling=False
+    # forbidding an unwilling one, both take precedence over position_override
+    # in solver.py, so forcing a candidate into either kind of position here
+    # will itself go NO_SOLUTION when the corresponding gate is closed -
+    # correctly excluding them as a substitution option with no special-casing.
+    resp = solver.solve_lines(
+        trial_players, num_forwards_requested, num_defense_requested, time_limit,
+        allow_oop=allow_oop, allow_unwilling=allow_unwilling,
+    )
     if resp.status == "NO_SOLUTION":
         return False
     return _objective_key(resp) == baseline_key
@@ -116,10 +167,21 @@ def compute_degrees_of_freedom(
     num_forwards_requested: int,
     num_defense_requested: int,
     time_limit: int = 5,
+    allow_oop: bool = True,
+    allow_unwilling: bool = False,
     max_workers: int = 8,
+    cancel_event: Optional[threading.Event] = None,
 ) -> DegreesOfFreedomResult | None:
-    baseline = solver.solve_lines(players, num_forwards_requested, num_defense_requested, time_limit)
+    if cancel_event is not None and cancel_event.is_set():
+        return None
+
+    baseline = solver.solve_lines(
+        players, num_forwards_requested, num_defense_requested, time_limit,
+        allow_oop=allow_oop, allow_unwilling=allow_unwilling,
+    )
     if baseline.status == "NO_SOLUTION":
+        return None
+    if cancel_event is not None and cancel_event.is_set():
         return None
 
     baseline_key = _objective_key(baseline)
@@ -134,23 +196,34 @@ def compute_degrees_of_freedom(
                 continue  # trivially ties the baseline by definition - counted separately below
             if p.available != 1:
                 continue
-            if position in p.unwilling:
-                continue  # asking someone truly unwilling isn't a real "option"
+            if position in p.unwilling and not allow_unwilling:
+                continue  # gate closed - this would fail solver.py's hard constraint anyway
             if p.position_override and p.position_override != position:
                 continue  # already pinned elsewhere by the scenario itself
             if p.link:
                 continue  # linked pairs need their own substitution logic - out of scope for v1
             work.append((position, p.id))
 
+    # submit() doesn't block, so by the time a cancel signal can realistically
+    # arrive, every item here has typically already been queued - the actual
+    # stopping power is _check_candidate() bailing at the top of its own task
+    # once it (eventually) runs, not this loop. This loop's own check is a
+    # cheap extra for the rare huge-batch case where submission itself takes
+    # a while. Neither of these interrupts a solve already *in progress*
+    # (that would need cooperative stopping inside solver.py; see phase 2).
     outcomes: Dict[Tuple[str, str], bool] = {}
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {
-            pool.submit(
-                _check_candidate, players, candidate_id, position,
-                num_forwards_requested, num_defense_requested, time_limit, baseline_key,
-            ): (position, candidate_id)
-            for position, candidate_id in work
-        }
+        futures = {}
+        for position, candidate_id in work:
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            futures[
+                pool.submit(
+                    _check_candidate, players, candidate_id, position,
+                    num_forwards_requested, num_defense_requested, time_limit, baseline_key,
+                    allow_oop=allow_oop, allow_unwilling=allow_unwilling, cancel_event=cancel_event,
+                )
+            ] = (position, candidate_id)
         for future in as_completed(futures):
             outcomes[futures[future]] = future.result()
 
@@ -186,11 +259,16 @@ def main() -> None:
     ap.add_argument("--forwards", type=int, default=3)
     ap.add_argument("--defense", type=int, default=3)
     ap.add_argument("--time-limit", type=int, default=5, help="Per-solve CP-SAT time limit, in seconds")
+    ap.add_argument("--no-allow-oop", dest="allow_oop", action="store_false", default=True)
+    ap.add_argument("--allow-unwilling", dest="allow_unwilling", action="store_true", default=False)
     args = ap.parse_args()
 
     players = solver.read_roster(args.roster)
     started = time.monotonic()
-    result = compute_degrees_of_freedom(players, args.forwards, args.defense, args.time_limit)
+    result = compute_degrees_of_freedom(
+        players, args.forwards, args.defense, args.time_limit,
+        allow_oop=args.allow_oop, allow_unwilling=args.allow_unwilling,
+    )
     elapsed = time.monotonic() - started
 
     if result is None:

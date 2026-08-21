@@ -97,7 +97,9 @@
         '<div class="compare-column-header">' +
         '<h2>' + escapeHtml(sc.title) + '</h2>' +
         (sc.description ? '<p class="compare-description">' + escapeHtml(sc.description) + '</p>' : '') +
-        '<p class="compare-settings">Forwards ' + sc.forwards + ' &middot; Defense ' + sc.defense + '</p>' +
+        '<p class="compare-settings">Forwards ' + sc.forwards + ' &middot; Defense ' + sc.defense +
+        ' &middot; Allow OOP ' + (sc.allow_oop === false ? 'No' : 'Yes') +
+        ' &middot; Allow Unwilling ' + (sc.allow_unwilling === true ? 'Yes' : 'No') + '</p>' +
         '<a class="compare-load-link" href="' + sc.load_url + '">Load into editor&hellip;</a>' +
         '</div>' +
         renderResult(sc.result) +

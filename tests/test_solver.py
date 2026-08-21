@@ -44,7 +44,10 @@ def test_optional_position_override_beats_prefs_and_unwilling():
         {"id": "P3", "name": "C", "available": "1", "experience": "3", "preferred_positions": "RW", "secondary_positions": ""},
     ]
     players = solver.players_from_rows(rows)
-    result = solver.solve_lines(players, 1, 0, 10)
+    # allow_unwilling defaults to False as of that feature - explicitly
+    # allow it here, since overriding into an unwilling position is exactly
+    # what this test is about.
+    result = solver.solve_lines(players, 1, 0, 10, allow_unwilling=True)
     p1_positions = [pos for pid, _, pos in all_assignments(result) if pid == "P1"]
     assert p1_positions == ["C"]
 
@@ -104,6 +107,114 @@ def test_optional_player_link_forces_same_forward_line():
     assignments = {pid: slot for pid, slot, _ in all_assignments(result)}
     assert "P1" in assignments and "P4" in assignments
     assert unit_of(assignments["P1"]) == unit_of(assignments["P4"])
+
+
+def test_allow_oop_true_permits_filling_a_slot_with_an_untagged_player():
+    # Nobody prefers or lists RW as secondary, and there are exactly enough
+    # players to fill all 3 forward slots - someone has to play RW out of
+    # position, and allow_oop's default (True) must permit that.
+    rows = [
+        {"id": "P1", "name": "A", "available": "1", "experience": "3", "preferred_positions": "C", "secondary_positions": ""},
+        {"id": "P2", "name": "B", "available": "1", "experience": "3", "preferred_positions": "C", "secondary_positions": ""},
+        {"id": "P3", "name": "C", "available": "1", "experience": "3", "preferred_positions": "LW", "secondary_positions": ""},
+    ]
+    players = solver.players_from_rows(rows)
+    result = solver.solve_lines(players, 1, 0, 10, allow_oop=True)
+    assert result.status in ("OPTIMAL", "FEASIBLE")
+    assert result.summary.total_assigned == 3
+    rw_slot = next(a for fl in result.forward_lines for a in fl.slots if a.position == "RW")
+    assert rw_slot.status == "oop"
+
+
+def test_allow_oop_false_forbids_filling_a_slot_with_an_untagged_player():
+    # Identical roster to the allow_oop=True case above - the only feasible
+    # solution there requires one player OOP at RW, which allow_oop=False
+    # must now forbid outright, making the whole solve infeasible (there's
+    # no one else who could take that slot instead).
+    rows = [
+        {"id": "P1", "name": "A", "available": "1", "experience": "3", "preferred_positions": "C", "secondary_positions": ""},
+        {"id": "P2", "name": "B", "available": "1", "experience": "3", "preferred_positions": "C", "secondary_positions": ""},
+        {"id": "P3", "name": "C", "available": "1", "experience": "3", "preferred_positions": "LW", "secondary_positions": ""},
+    ]
+    players = solver.players_from_rows(rows)
+    result = solver.solve_lines(players, 1, 0, 10, allow_oop=False)
+    assert result.status == "NO_SOLUTION"
+
+
+def test_allow_oop_false_takes_precedence_over_an_override_to_an_untagged_position():
+    # P1 is overridden to C, a position it never ranked at all (not
+    # preferred, secondary, or unwilling) - allow_oop=False must block that
+    # override outright rather than honoring it, per the documented
+    # precedence (available > allow_oop > override > preferences).
+    rows = [
+        {"id": "P1", "name": "A", "available": "1", "experience": "3", "preferred_positions": "LW", "secondary_positions": "", "optional_position_override": "C"},
+        {"id": "P2", "name": "B", "available": "1", "experience": "3", "preferred_positions": "C", "secondary_positions": ""},
+        {"id": "P3", "name": "C", "available": "1", "experience": "3", "preferred_positions": "RW", "secondary_positions": ""},
+    ]
+    players = solver.players_from_rows(rows)
+    result_allowed = solver.solve_lines(players, 1, 0, 10, allow_oop=True)
+    assert result_allowed.status in ("OPTIMAL", "FEASIBLE")
+
+    result_forbidden = solver.solve_lines(players, 1, 0, 10, allow_oop=False)
+    assert result_forbidden.status == "NO_SOLUTION"
+
+
+def test_allow_oop_false_does_not_affect_an_override_to_an_unwilling_position():
+    # allow_oop only ever concerns truly untagged positions - an override to
+    # a position the player marked *unwilling* is a separate, unaffected
+    # axis, and must still be honored even with allow_oop=False, as long as
+    # allow_unwilling explicitly permits it (its own default is False).
+    rows = [
+        {"id": "P1", "name": "A", "available": "1", "experience": "3", "preferred_positions": "LW", "secondary_positions": "", "unwilling_positions": "C", "optional_position_override": "C"},
+        {"id": "P2", "name": "B", "available": "1", "experience": "3", "preferred_positions": "LW", "secondary_positions": ""},
+        {"id": "P3", "name": "C", "available": "1", "experience": "3", "preferred_positions": "RW", "secondary_positions": ""},
+    ]
+    players = solver.players_from_rows(rows)
+    result = solver.solve_lines(players, 1, 0, 10, allow_oop=False, allow_unwilling=True)
+    assert result.status in ("OPTIMAL", "FEASIBLE")
+    p1_slot = next(a for fl in result.forward_lines for a in fl.slots if a.player_id == "P1")
+    assert p1_slot.position == "C"
+    assert p1_slot.status == "unwilling"
+
+
+def test_allow_unwilling_defaults_to_false_and_blocks_an_override_to_it():
+    # Default behavior as of this feature: an override into a position the
+    # player marked unwilling is forbidden unless explicitly allowed - a
+    # real behavior change from this app's history, made deliberately.
+    rows = [
+        {"id": "P1", "name": "A", "available": "1", "experience": "3", "preferred_positions": "LW", "secondary_positions": "", "unwilling_positions": "C", "optional_position_override": "C"},
+        {"id": "P2", "name": "B", "available": "1", "experience": "3", "preferred_positions": "C", "secondary_positions": ""},
+        {"id": "P3", "name": "C", "available": "1", "experience": "3", "preferred_positions": "RW", "secondary_positions": ""},
+    ]
+    players = solver.players_from_rows(rows)
+    result_default = solver.solve_lines(players, 1, 0, 10)
+    assert result_default.status == "NO_SOLUTION"
+
+    result_explicit_false = solver.solve_lines(players, 1, 0, 10, allow_unwilling=False)
+    assert result_explicit_false.status == "NO_SOLUTION"
+
+    result_allowed = solver.solve_lines(players, 1, 0, 10, allow_unwilling=True)
+    assert result_allowed.status in ("OPTIMAL", "FEASIBLE")
+    p1_slot = next(a for fl in result_allowed.forward_lines for a in fl.slots if a.player_id == "P1")
+    assert p1_slot.position == "C"
+    assert p1_slot.status == "unwilling"
+
+
+def test_allow_unwilling_false_does_not_affect_non_overridden_players():
+    # A non-overridden player was already hard-blocked from their unwilling
+    # positions before this feature existed - allow_unwilling changes
+    # nothing for them either way, it only ever gates the override escape
+    # hatch.
+    rows = [
+        {"id": "P1", "name": "A", "available": "1", "experience": "3", "preferred_positions": "LW;RW", "secondary_positions": "", "unwilling_positions": "C"},
+        {"id": "P2", "name": "B", "available": "1", "experience": "3", "preferred_positions": "C", "secondary_positions": ""},
+        {"id": "P3", "name": "C", "available": "1", "experience": "3", "preferred_positions": "RW;LW", "secondary_positions": ""},
+    ]
+    players = solver.players_from_rows(rows)
+    result = solver.solve_lines(players, 1, 0, 10, allow_unwilling=False)
+    assert result.status in ("OPTIMAL", "FEASIBLE")
+    p1_positions = [pos for pid, _, pos in all_assignments(result) if pid == "P1"]
+    assert p1_positions == ["LW"] or p1_positions == ["RW"]
 
 
 def test_optional_player_link_benches_together_when_unsatisfiable():

@@ -96,6 +96,8 @@
         forwards: serverLoadedScenario.forwards,
         defense: serverLoadedScenario.defense,
         time_limit: serverLoadedScenario.time_limit,
+        allow_oop: serverLoadedScenario.allow_oop,
+        allow_unwilling: serverLoadedScenario.allow_unwilling,
         result: serverLoadedScenario.result,
         dof: serverLoadedScenario.dof,
       }
@@ -141,6 +143,10 @@
   // only; last-known numbers stay on screen underneath rather than being
   // wiped, same treatment as the rest of the stale results panel.
   let dofPending = false;
+  // The job id of whichever dof request is currently in flight server-side,
+  // if any - lets cancelDof() ask the server to actually stop it (not just
+  // abort the client's own wait on it). See dof.py's job registry.
+  let currentDofJobId = null;
   const bannerEl = document.getElementById("status-banner");
   const autoToggle = document.getElementById("auto-solve-toggle");
   const titleInput = document.getElementById("roster-title");
@@ -233,6 +239,8 @@
       forwards: parseInt(document.getElementById("setting-forwards").value, 10) || 0,
       defense: parseInt(document.getElementById("setting-defense").value, 10) || 0,
       time_limit: parseInt(document.getElementById("setting-time-limit").value, 10) || 5,
+      allow_oop: document.getElementById("setting-allow-oop").checked,
+      allow_unwilling: document.getElementById("setting-allow-unwilling").checked,
     };
   }
 
@@ -514,7 +522,14 @@
     const resp = await fetch(STUDIO_BASE + "/solve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ players: players, forwards: settings.forwards, defense: settings.defense, time_limit: settings.time_limit }),
+      body: JSON.stringify({
+        players: players,
+        forwards: settings.forwards,
+        defense: settings.defense,
+        time_limit: settings.time_limit,
+        allow_oop: settings.allow_oop,
+        allow_unwilling: settings.allow_unwilling,
+      }),
     });
     lastResult = resp.ok ? await resp.json() : { status: "NO_SOLUTION" };
     resultPending = false;
@@ -535,6 +550,20 @@
 
   function cancelDof() {
     if (dofAbortController) dofAbortController.abort();
+    if (currentDofJobId) {
+      // Best-effort: tells the server to stop launching further re-solves
+      // for the job we're abandoning. Fire-and-forget - if this never
+      // arrives, the old computation just runs to completion server-side
+      // and its result gets discarded by the generation check below anyway.
+      const jobIdToCancel = currentDofJobId;
+      currentDofJobId = null;
+      fetch(STUDIO_BASE + "/degrees-of-freedom/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: jobIdToCancel }),
+        keepalive: true,
+      }).catch(() => {});
+    }
     dofGeneration++;
     dofPending = true;
     renderStaleness();
@@ -545,6 +574,8 @@
     const myGeneration = dofGeneration;
     const controller = new AbortController();
     dofAbortController = controller;
+    const jobId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(myGeneration) + "-" + Date.now();
+    currentDofJobId = jobId;
 
     // Deliberately not touching dofScoreEl/dofBreakdownBodyEl here: the
     // last-known numbers stay on screen (just dimmed, via dofPending above)
@@ -557,7 +588,15 @@
       resp = await fetch(STUDIO_BASE + "/degrees-of-freedom", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ players: players, forwards: settings.forwards, defense: settings.defense, time_limit: settings.time_limit }),
+        body: JSON.stringify({
+          players: players,
+          forwards: settings.forwards,
+          defense: settings.defense,
+          time_limit: settings.time_limit,
+          allow_oop: settings.allow_oop,
+          allow_unwilling: settings.allow_unwilling,
+          job_id: jobId,
+        }),
         signal: controller.signal,
       });
     } catch (err) {
@@ -655,7 +694,7 @@
     scheduleSolve();
   });
 
-  for (const id of ["setting-forwards", "setting-defense", "setting-time-limit"]) {
+  for (const id of ["setting-forwards", "setting-defense", "setting-time-limit", "setting-allow-oop", "setting-allow-unwilling"]) {
     document.getElementById(id).addEventListener("change", scheduleSolve);
   }
 
@@ -775,6 +814,8 @@
         forwards: settings.forwards,
         defense: settings.defense,
         time_limit: settings.time_limit,
+        allow_oop: settings.allow_oop,
+        allow_unwilling: settings.allow_unwilling,
         result: lastResult,
         dof: dofPending ? null : lastDofResult,
       }),
@@ -788,6 +829,8 @@
       forwards: settings.forwards,
       defense: settings.defense,
       time_limit: settings.time_limit,
+      allow_oop: settings.allow_oop,
+      allow_unwilling: settings.allow_unwilling,
       result: lastResult,
       dof: dofPending ? null : lastDofResult,
     };
@@ -825,6 +868,8 @@
         forwards: settings.forwards,
         defense: settings.defense,
         time_limit: settings.time_limit,
+        allow_oop: settings.allow_oop,
+        allow_unwilling: settings.allow_unwilling,
         result: lastResult,
         dof: dofPending ? null : lastDofResult,
         parent_scenario_id: loadedScenario ? loadedScenario.id : null,
@@ -839,6 +884,8 @@
         forwards: settings.forwards,
         defense: settings.defense,
         time_limit: settings.time_limit,
+        allow_oop: settings.allow_oop,
+        allow_unwilling: settings.allow_unwilling,
         result: lastResult,
         dof: dofPending ? null : lastDofResult,
       };
@@ -928,6 +975,12 @@
       document.getElementById("setting-forwards").value = scenarioOriginMeta.forwards;
       document.getElementById("setting-defense").value = scenarioOriginMeta.defense;
       document.getElementById("setting-time-limit").value = scenarioOriginMeta.time_limit;
+      document.getElementById("setting-allow-oop").checked = scenarioOriginMeta.allow_oop !== false;
+      // Opposite fallback direction from allow_oop above: allow_unwilling
+      // defaults to false, so a missing/undefined cached value (an older
+      // scenario, or one from before this setting existed) must read as
+      // unchecked, not checked.
+      document.getElementById("setting-allow-unwilling").checked = scenarioOriginMeta.allow_unwilling === true;
       lastResult = scenarioOriginMeta.result;
       resultPending = false;
       render();

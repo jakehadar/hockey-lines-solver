@@ -327,6 +327,8 @@ def studio_view(roster_id: int):
             "forwards": scenario["forwards"],
             "defense": scenario["defense"],
             "time_limit": scenario["time_limit"],
+            "allow_oop": bool(scenario["allow_oop"]),
+            "allow_unwilling": bool(scenario["allow_unwilling"]),
             "result": json.loads(scenario["result_json"]),
             "dof": json.loads(scenario["dof_json"]) if scenario["dof_json"] else None,
         }
@@ -354,7 +356,10 @@ def studio_solve(roster_id: int):
     if not req.players:
         abort(400, description="players must not be empty.")
     players = solver.players_from_player_in(req.players)
-    result = solver.solve_lines(players, req.forwards, req.defense, req.time_limit)
+    result = solver.solve_lines(
+        players, req.forwards, req.defense, req.time_limit,
+        allow_oop=req.allow_oop, allow_unwilling=req.allow_unwilling,
+    )
     return jsonify(result.model_dump())
 
 
@@ -369,6 +374,7 @@ def studio_degrees_of_freedom(roster_id: int):
     if db.get_roster(roster_id, workspace["id"]) is None:
         abort(404)
     body = request.get_json(silent=True) or {}
+    job_id = body.get("job_id")
     try:
         req = SolveRequest.model_validate(body)
     except ValidationError as e:
@@ -376,7 +382,15 @@ def studio_degrees_of_freedom(roster_id: int):
     if not req.players:
         abort(400, description="players must not be empty.")
     players = solver.players_from_player_in(req.players)
-    result = dof.compute_degrees_of_freedom(players, req.forwards, req.defense, req.time_limit)
+    cancel_event = dof.register_job(job_id) if job_id else None
+    try:
+        result = dof.compute_degrees_of_freedom(
+            players, req.forwards, req.defense, req.time_limit,
+            allow_oop=req.allow_oop, allow_unwilling=req.allow_unwilling, cancel_event=cancel_event
+        )
+    finally:
+        if job_id:
+            dof.unregister_job(job_id)
     if result is None:
         return jsonify({"status": "NO_SOLUTION"})
     return jsonify(
@@ -396,6 +410,20 @@ def studio_degrees_of_freedom(roster_id: int):
             ],
         }
     )
+
+
+@app.post("/w/<token>/studio/<int:roster_id>/degrees-of-freedom/cancel")
+def studio_degrees_of_freedom_cancel(roster_id: int):
+    """Best-effort: sets the cancel event for a job id if it's still
+    running, so /degrees-of-freedom stops launching further re-solves.
+    Idempotent - a job_id that's already finished or never existed is not
+    an error, just a no-op."""
+    _require_workspace()
+    body = request.get_json(silent=True) or {}
+    job_id = body.get("job_id")
+    if job_id:
+        dof.cancel_job(job_id)
+    return jsonify({"ok": True})
 
 
 @app.post("/w/<token>/studio/<int:roster_id>/save")
@@ -452,6 +480,8 @@ def scenarios_create(roster_id: int):
         req.result.model_dump_json(),
         parent_scenario_id=req.parent_scenario_id,
         dof_json=req.dof.model_dump_json() if req.dof else None,
+        allow_oop=req.allow_oop,
+        allow_unwilling=req.allow_unwilling,
     )
     return jsonify({"scenario_id": scenario_id})
 
@@ -479,6 +509,8 @@ def scenarios_update(roster_id: int, scenario_id: int):
         json.dumps([p.model_dump() for p in req.players]),
         req.result.model_dump_json(),
         dof_json=req.dof.model_dump_json() if req.dof else None,
+        allow_oop=req.allow_oop,
+        allow_unwilling=req.allow_unwilling,
     )
     return jsonify({"scenario_id": scenario_id})
 
@@ -523,6 +555,8 @@ def scenarios_compare(roster_id: int):
             "forwards": s["forwards"],
             "defense": s["defense"],
             "time_limit": s["time_limit"],
+            "allow_oop": bool(s["allow_oop"]),
+            "allow_unwilling": bool(s["allow_unwilling"]),
             "load_url": url_for("studio_view", roster_id=roster_id, load_scenario=s["id"]),
             "result": json.loads(s["result_json"]),
             "dof": json.loads(s["dof_json"]) if s["dof_json"] else None,
@@ -539,4 +573,8 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5000)
     args = parser.parse_args()
-    app.run(host=args.host, port=args.port)
+    # threaded=True so a /degrees-of-freedom/cancel request can actually
+    # reach the server while a /degrees-of-freedom request is still being
+    # handled - CP-SAT's Solve() releases the GIL, so a second thread can
+    # run concurrently without contention.
+    app.run(host=args.host, port=args.port, threaded=True)

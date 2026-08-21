@@ -73,6 +73,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
     existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(scenarios)")}
     if "dof_json" not in existing_columns:
         conn.execute("ALTER TABLE scenarios ADD COLUMN dof_json TEXT")
+    if "allow_oop" not in existing_columns:
+        conn.execute("ALTER TABLE scenarios ADD COLUMN allow_oop INTEGER NOT NULL DEFAULT 1")
+    if "allow_unwilling" not in existing_columns:
+        # Backfilled as 1 (true), not schema.sql's new-row default of 0 -
+        # these existing rows were actually solved before this column (or
+        # any gate on it) existed, when an override into an unwilling
+        # position was always honored unconditionally.
+        conn.execute("ALTER TABLE scenarios ADD COLUMN allow_unwilling INTEGER NOT NULL DEFAULT 1")
 
 
 def create_workspace(token: str, client_ip: str | None = None, db_path: Path | None = None) -> int:
@@ -211,13 +219,16 @@ def create_scenario(
     result_json: str,
     parent_scenario_id: int | None = None,
     dof_json: str | None = None,
+    allow_oop: bool = True,
+    allow_unwilling: bool = False,
     db_path: Path | None = None,
 ) -> int:
     with get_connection(db_path) as conn:
         cur = conn.execute(
             "INSERT INTO scenarios (roster_id, parent_scenario_id, title, description, forwards, defense, "
-            "time_limit, players_json, result_json, dof_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (roster_id, parent_scenario_id, title, description, forwards, defense, time_limit, players_json, result_json, dof_json),
+            "time_limit, players_json, result_json, dof_json, allow_oop, allow_unwilling) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (roster_id, parent_scenario_id, title, description, forwards, defense, time_limit, players_json, result_json, dof_json, int(allow_oop), int(allow_unwilling)),
         )
         return cur.lastrowid
 
@@ -230,14 +241,16 @@ def replace_scenario(
     players_json: str,
     result_json: str,
     dof_json: str | None = None,
+    allow_oop: bool = True,
+    allow_unwilling: bool = False,
     db_path: Path | None = None,
 ) -> None:
     """Overwrite an already-loaded scenario in place (Save scenario, not Branch)."""
     with get_connection(db_path) as conn:
         conn.execute(
             "UPDATE scenarios SET forwards = ?, defense = ?, time_limit = ?, players_json = ?, "
-            "result_json = ?, dof_json = ?, created_at = datetime('now') WHERE id = ?",
-            (forwards, defense, time_limit, players_json, result_json, dof_json, scenario_id),
+            "result_json = ?, dof_json = ?, allow_oop = ?, allow_unwilling = ?, created_at = datetime('now') WHERE id = ?",
+            (forwards, defense, time_limit, players_json, result_json, dof_json, int(allow_oop), int(allow_unwilling), scenario_id),
         )
 
 
@@ -245,7 +258,7 @@ def list_scenarios(roster_id: int, db_path: Path | None = None) -> List[sqlite3.
     with get_connection(db_path) as conn:
         return conn.execute(
             "SELECT s.id, s.title, s.description, s.created_at, s.parent_scenario_id, s.forwards, "
-            "s.defense, s.time_limit, s.algo_version, s.dof_json, p.title AS parent_title "
+            "s.defense, s.time_limit, s.algo_version, s.dof_json, s.allow_oop, s.allow_unwilling, p.title AS parent_title "
             "FROM scenarios s LEFT JOIN scenarios p ON p.id = s.parent_scenario_id "
             "WHERE s.roster_id = ? ORDER BY s.created_at DESC",
             (roster_id,),
@@ -256,7 +269,7 @@ def get_scenario(scenario_id: int, roster_id: int, db_path: Path | None = None) 
     with get_connection(db_path) as conn:
         return conn.execute(
             "SELECT id, title, description, created_at, parent_scenario_id, forwards, defense, time_limit, "
-            "algo_version, players_json, result_json, dof_json FROM scenarios WHERE id = ? AND roster_id = ?",
+            "algo_version, players_json, result_json, dof_json, allow_oop, allow_unwilling FROM scenarios WHERE id = ? AND roster_id = ?",
             (scenario_id, roster_id),
         ).fetchone()
 

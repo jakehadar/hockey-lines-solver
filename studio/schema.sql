@@ -50,6 +50,20 @@ CREATE TABLE IF NOT EXISTS scenarios (
     forwards INTEGER NOT NULL,
     defense INTEGER NOT NULL,
     time_limit INTEGER NOT NULL,
+    -- Whether a position neither preferred nor secondary (nor unwilling) for
+    -- a player could be used to fill a slot at all - see solver.py's
+    -- allow_oop. Nullable so old rows (saved before this existed) fall back
+    -- to the historical behavior (1, i.e. true) rather than NULL/0.
+    allow_oop INTEGER NOT NULL DEFAULT 1,
+    -- Whether optional_position_override may force a player onto a position
+    -- they marked unwilling - see solver.py's allow_unwilling. Unlike
+    -- allow_oop, this defaults to 0 (forbidden) for brand-new rows: unwilling
+    -- is a stronger signal than an untagged position, so overriding it needs
+    -- explicit opt-in. (The migration path for pre-existing databases
+    -- backfills existing rows as 1 instead - see db.py's _migrate() - since
+    -- historically an override into an unwilling position was always
+    -- honored unconditionally, before this column existed to gate it.)
+    allow_unwilling INTEGER NOT NULL DEFAULT 0,
     -- Bumped only when solver.py's algorithm changes in a way that could
     -- change results for the same inputs; 0 until that first happens. Lets a
     -- future comparison view flag scenarios computed under an older

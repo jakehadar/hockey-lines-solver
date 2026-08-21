@@ -32,8 +32,13 @@ Optional columns (omit entirely for a roster CSV that predates these — fully b
 These levers aren't independent — each overrides the ones below it:
 
 1. **`available`** — the final word. An unavailable player never takes the ice, full stop, even if overridden.
-2. **`optional_position_override`** — locks an *available* player to one exact position and forces them onto it; the solver solves the rest of the roster around that lock. If there isn't room for it (e.g. more players overridden to the same position than there are slots for it), the solve goes infeasible rather than quietly dropping the override.
-3. **`preferred_positions` / `secondary_positions` / `unwilling_positions`** — the normal preference/eligibility model the solver optimizes against for every player who isn't overridden. A player who should merely *prefer* a position but can still be benched if it helps the lines doesn't need an override at all — that's exactly what `preferred_positions` (with everything else left secondary or unwilling) already expresses.
+2. **`allow_oop`** and **`allow_unwilling`** (solve-time settings, not per-player CSV columns — see `--no-allow-oop`/`--allow-unwilling`, or the Studio UI's toggles) — two independent gates, each covering a disjoint category of position for a player:
+   - `allow_oop` (default `True`, matching this app's historical behavior): when `False`, a position that's neither a player's preferred, secondary, nor unwilling (i.e. one they never ranked at all) is forbidden outright.
+   - `allow_unwilling` (default `False` — a deliberate asymmetry, since unwilling is a stronger signal than an untagged position): when `False`, a position the player marked unwilling is forbidden outright, full stop.
+   
+   Both take precedence over `optional_position_override`: an override into a position blocked by whichever gate applies directly contradicts that constraint, and the solve goes infeasible rather than honoring the override. Getting an unwilling assignment onto the ice therefore requires *both* an explicit override to that exact position *and* `allow_unwilling=True` — two deliberate gates, not one.
+3. **`optional_position_override`** — locks an *available* player to one exact position and forces them onto it (subject to #2 above); the solver solves the rest of the roster around that lock. If there isn't room for it (e.g. more players overridden to the same position than there are slots for it), the solve goes infeasible rather than quietly dropping the override.
+4. **`preferred_positions` / `secondary_positions` / `unwilling_positions`** — the normal preference/eligibility model the solver optimizes against for every player who isn't overridden. A player who should merely *prefer* a position but can still be benched if it helps the lines doesn't need an override at all — that's exactly what `preferred_positions` (with everything else left secondary or unwilling) already expresses.
 
 These optional levers do no validation — an unsatisfiable combination (e.g. two players both overridden to the same position with only one such slot, or conflicting links) will simply make the solve infeasible (`NO_SOLUTION`) rather than raising an error.
 
@@ -52,12 +57,13 @@ python solver.py --forwards 3 --defense 3 --roster rosters/sample_roster.csv
 Options:
 - `--forwards` number of forward lines (default 3)
 - `--defense` number of defensive pairs (default 3)
-- `--allow-oop` allow assignments outside player's preferred positions (default off)
+- `--no-allow-oop` forbid assignments to a position a player neither prefers nor lists as secondary (default: allowed)
+- `--allow-unwilling` allow `optional_position_override` to force a player onto a position they marked unwilling (default: forbidden)
 - `--time-limit` solver time limit in seconds (default 20)
 
 Notes:
 - The objective maximizes number of assigned players first, then preference satisfaction, then minimizes forward-line experience imbalance (L1 norm).
-- Output now annotates assignments as `primary` (player's primary position), `secondary` (player's secondary position), or `OOP` (out-of-position when `--allow-oop` is used).
+- Output annotates assignments as `primary` (player's primary position), `secondary` (player's secondary position), or `OOP` (out-of-position — only possible at all when OOP is allowed, i.e. `--no-allow-oop` wasn't passed).
 
 ## REST API
 
