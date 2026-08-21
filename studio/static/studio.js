@@ -178,7 +178,7 @@
           '<td>' + (alt ? '<span class="badge alt">ALT</span>' : '<span class="badge">P</span>') + "</td>" +
           '<td data-col="name"><input type="text" data-field="name" value="' + (p.name || "") + '"' + (locked ? " readonly" : "") + "></td>" +
           '<td><input type="number" min="1" max="5" data-field="experience" value="' + p.experience + '" style="width:3.5em"></td>' +
-          '<td><input type="checkbox" data-field="available" ' + (p.available ? "checked" : "") + "></td>" +
+          '<td class="col-ephemeral"><input type="checkbox" data-field="available" ' + (p.available ? "checked" : "") + "></td>" +
           '<td class="chips">' + positionChips(p, "preferred_positions") + "</td>" +
           '<td class="chips">' + positionChips(p, "secondary_positions") + "</td>" +
           '<td class="chips">' + positionChips(p, "unwilling_positions") + "</td>" +

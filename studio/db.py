@@ -1,9 +1,10 @@
 """Thin sqlite3 repository for studio's persisted rosters/players.
 
-Only the "truth" fields round-trip here: player_key, name, available,
-experience, preferred_positions, secondary_positions, unwilling_positions.
-optional_position_override/optional_player_link are scenario-only levers
-that never reach this layer (studio/app.py strips them before calling in).
+Only the "truth" fields round-trip here: player_key, name, experience,
+preferred_positions, secondary_positions, unwilling_positions. available,
+optional_position_override, and optional_player_link are scenario-only
+levers that never reach this layer (studio/app.py strips them before
+calling in).
 """
 
 from __future__ import annotations
@@ -21,7 +22,6 @@ SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 class PlayerRecord(TypedDict):
     player_key: str
     name: str
-    available: int
     experience: int
     preferred_positions: List[str]
     secondary_positions: List[str]
@@ -119,7 +119,7 @@ def create_roster(workspace_id: int, title: str, db_path: Path | None = None) ->
 def list_players(roster_id: int, db_path: Path | None = None) -> List[sqlite3.Row]:
     with get_connection(db_path) as conn:
         return conn.execute(
-            "SELECT player_key, name, available, experience, preferred_positions, "
+            "SELECT player_key, name, experience, preferred_positions, "
             "secondary_positions, unwilling_positions FROM players WHERE roster_id = ? "
             "ORDER BY player_key",
             (roster_id,),
@@ -128,15 +128,14 @@ def list_players(roster_id: int, db_path: Path | None = None) -> List[sqlite3.Ro
 
 def _insert_players(conn: sqlite3.Connection, roster_id: int, players: List[PlayerRecord]) -> None:
     conn.executemany(
-        "INSERT INTO players (roster_id, player_key, name, available, experience, "
+        "INSERT INTO players (roster_id, player_key, name, experience, "
         "preferred_positions, secondary_positions, unwilling_positions) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
         [
             (
                 roster_id,
                 p["player_key"],
                 p["name"],
-                p["available"],
                 p["experience"],
                 _join(p["preferred_positions"]),
                 _join(p["secondary_positions"]),
@@ -159,7 +158,6 @@ def player_records_from_players(players: Iterable) -> List[PlayerRecord]:
         {
             "player_key": p.id,
             "name": p.name,
-            "available": p.available,
             "experience": p.experience,
             "preferred_positions": p.prefs,
             "secondary_positions": p.secondary,

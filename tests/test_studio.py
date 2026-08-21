@@ -115,6 +115,8 @@ def test_solve_endpoint_is_stateless(client):
 
 
 def test_save_persists_unwilling_positions_but_not_ephemeral_fields(client, studio):
+    # available, optional_position_override, and optional_player_link are all
+    # ephemeral - none of them round-trip through the roster.
     _, db_module = studio
     token, roster_id = _create_roster(client)
 
@@ -122,7 +124,7 @@ def test_save_persists_unwilling_positions_but_not_ephemeral_fields(client, stud
         {
             "id": "P1",
             "name": "Alice",
-            "available": 1,
+            "available": 0,
             "experience": 3,
             "preferred_positions": ["LW"],
             "secondary_positions": ["RW"],
@@ -137,11 +139,15 @@ def test_save_persists_unwilling_positions_but_not_ephemeral_fields(client, stud
     rows = db_module.list_players(roster_id)
     assert len(rows) == 1
     assert rows[0]["unwilling_positions"] == "C"
+    assert "available" not in rows[0].keys()  # ephemeral, never persisted to the roster
 
-    # Reloading the page hydrates from the DB, where override/link never lived.
+    # Reloading the page hydrates from the DB, where override/link/available never lived -
+    # available in particular always comes back available (1), regardless of what was
+    # sent above, since a fresh (unbranched) scenario always starts all-available.
     resp = client.get(f"/w/{token}/studio/{roster_id}")
     assert b'"optional_position_override": null' in resp.data
     assert b'"optional_player_link": null' in resp.data
+    assert b'"available": 1' in resp.data
 
 
 def test_save_as_creates_an_independent_roster(client, studio):
@@ -250,13 +256,11 @@ def test_csv_upload_creates_a_roster_with_defaults_and_generated_ids(client, stu
 
     alice = next(p for p in players if p["name"] == "Alice")
     assert alice["player_key"] == "P01"
-    assert alice["available"] == 1
     assert alice["experience"] == 1  # blank rank -> defaulted
     assert alice["preferred_positions"] == "LW;C"
 
     bob = next(p for p in players if p["name"] == "Bob")
     assert bob["player_key"] == "P02"
-    assert bob["available"] == 1  # uploads are always available, regardless of the file
     assert bob["experience"] == 4
 
 
@@ -380,6 +384,36 @@ def test_create_scenario_with_a_parent_branches_it(client, studio):
     assert resp.status_code == 200
     child_id = resp.get_json()["scenario_id"]
     assert db_module.get_scenario(child_id, roster_id)["parent_scenario_id"] == parent_id
+
+
+def test_deselecting_available_persists_through_a_branch(client, studio):
+    _, db_module = studio
+    token, roster_id = _create_roster(client)
+
+    deselected = [dict(p, available=1) for p in SMALL_PLAYERS]
+    deselected[0]["available"] = 0  # Alice benched in this scenario
+
+    parent_id = _create_scenario(client, token, roster_id, title="Parent", players=deselected).get_json()["scenario_id"]
+    parent = db_module.get_scenario(parent_id, roster_id)
+    assert json.loads(parent["players_json"])[0]["available"] == 0
+
+    # Branching carries the same players (and their available flags) forward.
+    branch_resp = client.post(
+        f"/w/{token}/studio/{roster_id}/scenarios",
+        json={
+            "title": "Branch",
+            "description": "",
+            "players": deselected,
+            "forwards": 1,
+            "defense": 1,
+            "time_limit": 5,
+            "result": _fake_result(),
+            "parent_scenario_id": parent_id,
+        },
+    )
+    branch_id = branch_resp.get_json()["scenario_id"]
+    branch = db_module.get_scenario(branch_id, roster_id)
+    assert json.loads(branch["players_json"])[0]["available"] == 0
 
 
 def test_create_scenario_rejects_a_parent_from_another_roster(client, studio):

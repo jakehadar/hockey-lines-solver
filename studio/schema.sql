@@ -28,7 +28,6 @@ CREATE TABLE IF NOT EXISTS players (
     roster_id INTEGER NOT NULL REFERENCES rosters(id) ON DELETE CASCADE,
     player_key TEXT NOT NULL,
     name TEXT NOT NULL,
-    available INTEGER NOT NULL DEFAULT 1,
     experience INTEGER NOT NULL,
     preferred_positions TEXT NOT NULL DEFAULT '',
     secondary_positions TEXT NOT NULL DEFAULT '',

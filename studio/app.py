@@ -76,7 +76,7 @@ def _row_to_player_in_dict(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "id": row["player_key"],
         "name": row["name"],
-        "available": row["available"],
+        "available": 1,  # ephemeral, not part of the roster - every scenario starts all-available
         "experience": row["experience"],
         "preferred_positions": [p for p in row["preferred_positions"].split(";") if p],
         "secondary_positions": [p for p in row["secondary_positions"].split(";") if p],
@@ -91,7 +91,6 @@ def _players_to_records(players: list[PlayerIn]) -> list[db.PlayerRecord]:
         {
             "player_key": p.id,
             "name": p.name,
-            "available": p.available,
             "experience": p.experience,
             "preferred_positions": p.preferred_positions,
             "secondary_positions": p.secondary_positions,
@@ -133,8 +132,9 @@ def _players_from_csv_upload(text: str) -> list[db.PlayerRecord]:
     """Best-effort CSV -> PlayerRecord: only `name` is required, everything
     else falls back to a sensible default so users can fix it up by hand
     afterward. Rows without a name and columns we don't recognize are
-    silently skipped/ignored rather than treated as errors. Uploaded
-    rosters are always all-available; there's no "available" column."""
+    silently skipped/ignored rather than treated as errors. There's no
+    "available" column - it's ephemeral, scenario-only, never part of the
+    roster."""
     records: list[db.PlayerRecord] = []
     for row in csv.DictReader(io.StringIO(text)):
         name = (row.get("name") or "").strip()
@@ -148,7 +148,6 @@ def _players_from_csv_upload(text: str) -> list[db.PlayerRecord]:
             {
                 "player_key": f"P{len(records) + 1:02d}",
                 "name": name,
-                "available": 1,
                 "experience": rank,
                 "preferred_positions": _parse_positions(row.get("preferred_positions")),
                 "secondary_positions": _parse_positions(row.get("secondary_positions")),
