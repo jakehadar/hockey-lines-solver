@@ -221,6 +221,60 @@ button:disabled, button:disabled:hover { opacity: 0.45; cursor: not-allowed; bor
 .save-menu-item:hover { background: var(--bg); border-color: transparent; color: var(--text); }
 .save-menu-item:disabled, .save-menu-item:disabled:hover { opacity: 0.45; cursor: not-allowed; background: transparent; color: var(--muted); }
 
+/* Scenario heading dropdown: deliberately not styled like a button (no
+   border/background/padding on the heading itself) - it's a title first,
+   an affordance second, so it should read as text with a small caret next
+   to it, not a control competing with Save/Solve for visual weight. */
+.panel-heading-group { position: relative; display: flex; align-items: center; gap: 0.25rem; }
+.panel-heading-group.has-menu { cursor: pointer; }
+.panel-heading-group.has-menu:hover h2 { color: var(--accent); }
+.heading-caret-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.heading-caret-btn[hidden] { display: none; }
+.panel-heading-group.has-menu:hover .heading-caret-btn { color: var(--accent); }
+.heading-menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  min-width: 220px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 28px -8px rgba(28, 34, 48, 0.22), 0 2px 6px rgba(28, 34, 48, 0.08);
+  padding: 0.35rem;
+  z-index: 20;
+  display: none;
+  flex-direction: column;
+  gap: 0.15rem;
+  cursor: default;
+}
+.heading-menu.open { display: flex; }
+.heading-menu-item {
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 0.5rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text);
+  cursor: pointer;
+}
+.heading-menu-item:hover { background: var(--bg); }
+.heading-menu-divider { height: 1px; background: var(--border); margin: 0.25rem 0.1rem; }
+.heading-menu-empty { padding: 0.5rem 0.6rem; font-size: 0.8rem; color: var(--muted); }
+
 .scenarios-link { color: var(--muted); text-decoration: none; font-size: 0.85rem; padding: 0.45rem 0.2rem; }
 .scenarios-link:hover { color: var(--accent); }
 
@@ -241,6 +295,8 @@ dialog#scenario-dialog, dialog#unsaved-dialog {
 }
 dialog#scenario-dialog::backdrop, dialog#unsaved-dialog::backdrop { background: rgba(15, 18, 26, 0.35); }
 dialog#scenario-dialog h2, dialog#unsaved-dialog h2 { margin: 0 0 1rem; font-size: 1.05rem; }
+.dialog-subtitle { margin: -0.6rem 0 1rem; font-size: 0.82rem; color: var(--muted); }
+.dialog-subtitle:empty { display: none; }
 #unsaved-dialog-body { margin: 0 0 1.25rem; font-size: 0.9rem; color: var(--muted); line-height: 1.5; }
 .dialog-field { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.75rem; }
 .dialog-field input[type="text"] { padding: 0.5rem 0.6rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.95rem; color: var(--text); }
@@ -286,7 +342,12 @@ dialog#scenario-dialog h2, dialog#unsaved-dialog h2 { margin: 0 0 1rem; font-siz
 .studio-layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 1.25rem; align-items: start; }
 @media (max-width: 1000px) { .studio-layout { grid-template-columns: 1fr; } }
 
-.roster-panel, .results-panel {
+/* Solver settings + Lines/Summary/DOF stack in one column - a plain wrapper
+   (not a grid cell of its own) so .studio-layout stays a simple 2-column
+   grid and this column's cards just flow top-to-bottom inside it. */
+.results-column { display: flex; flex-direction: column; gap: 1.25rem; min-width: 0; }
+
+.roster-panel, .results-panel, .settings-panel {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -295,6 +356,7 @@ dialog#scenario-dialog h2, dialog#unsaved-dialog h2 { margin: 0 0 1rem; font-siz
 }
 .panel-header { display: flex; justify-content: space-between; align-items: center; }
 .add-buttons { display: flex; gap: 0.5rem; }
+.solver-actions { display: flex; align-items: center; gap: 0.5rem; }
 
 /* Stale-results indicator: the grid/summary are wholesale-replaced on every
    solve, so the dimming targets them directly rather than trying to persist
@@ -331,8 +393,27 @@ dialog#scenario-dialog h2, dialog#unsaved-dialog h2 { margin: 0 0 1rem; font-siz
 }
 @keyframes pending-spin { to { transform: rotate(360deg); } }
 
-.solve-settings { display: flex; gap: 1rem; margin: 0.75rem 0; font-size: 0.85rem; color: var(--muted); }
+.solve-settings { display: flex; gap: 1rem; font-size: 0.85rem; color: var(--muted); flex-wrap: wrap; align-items: flex-start; }
 .solve-settings input { width: 4em; margin-left: 0.3rem; }
+
+/* flex-basis: 100% forces this onto its own row within .solve-settings'
+   flex-wrap layout unconditionally - collapsed it's narrow enough to fit
+   next to Allow Unwilling and expanded it's wide enough to wrap on its own
+   regardless, so without this the toggle's own row position visibly jumps
+   between the two states depending on which happens to be true. */
+.objectives-details { font-size: 0.85rem; flex-basis: 100%; }
+.objectives-details summary { cursor: pointer; user-select: none; color: var(--muted); }
+.objectives-hint { margin: 0.4rem 0; color: var(--muted); font-size: 0.78rem; }
+.objectives-list { list-style: none; margin: 0.3rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
+.objectives-list li { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; background: var(--bg); border-radius: 6px; padding: 0.3rem 0.5rem; }
+.objectives-list li.objective-disabled { opacity: 0.55; }
+.objectives-list label { display: flex; align-items: center; gap: 0.4rem; }
+.objectives-list input[type="checkbox"] { width: auto; margin: 0; }
+.objective-reorder { display: flex; gap: 0.2rem; }
+.objective-reorder button { border: 1px solid var(--border); background: var(--panel); border-radius: 4px; width: 1.6em; height: 1.6em; cursor: pointer; line-height: 1; }
+.objective-reorder button:disabled { opacity: 0.35; cursor: default; }
+
+.objectives-used { font-size: 0.78rem; color: var(--muted); margin: -0.25rem 0 0.75rem; }
 
 .roster-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 .roster-table th { text-align: left; padding: 0.4rem; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--border); }
@@ -353,12 +434,10 @@ dialog#scenario-dialog h2, dialog#unsaved-dialog h2 { margin: 0 0 1rem; font-siz
 .branched-from { color: var(--muted); font-weight: 400; }
 .scenario-dof-subtitle { font-size: 0.78rem; color: var(--muted); margin-top: 0.15rem; }
 
-/* Roster mode: no ephemeral fields, no solver */
+/* Roster mode: no ephemeral fields, no solver - hiding .results-column takes
+   both the settings panel and the Lines/Summary/DOF panel with it. */
 #studio-root.mode-roster .col-ephemeral,
-#studio-root.mode-roster #solve-settings,
-#studio-root.mode-roster #auto-solve-label,
-#studio-root.mode-roster #solve-now-btn,
-#studio-root.mode-roster .results-panel {
+#studio-root.mode-roster .results-column {
   display: none;
 }
 #studio-root.mode-roster .studio-layout { grid-template-columns: 1fr; }
@@ -398,7 +477,8 @@ dialog#scenario-dialog h2, dialog#unsaved-dialog h2 { margin: 0 0 1rem; font-siz
 .compare-column-header { margin-bottom: 0.9rem; }
 .compare-column-header h2 { font-size: 1rem; text-transform: none; letter-spacing: normal; color: var(--text); margin: 0 0 0.3rem; display: flex; align-items: center; gap: 0.4rem; }
 .compare-description { margin: 0 0 0.4rem; font-size: 0.82rem; color: var(--muted); line-height: 1.4; }
-.compare-settings { margin: 0 0 0.5rem; font-size: 0.78rem; color: var(--muted); }
+.compare-settings { margin: 0 0 0.2rem; font-size: 0.78rem; color: var(--muted); }
+.compare-objectives { margin: 0 0 0.5rem; font-size: 0.78rem; color: var(--muted); }
 .compare-load-link { font-size: 0.78rem; color: var(--accent); text-decoration: none; }
 .compare-load-link:hover { text-decoration: underline; }
 .compare-column .lines-grid { grid-template-columns: 1fr; }

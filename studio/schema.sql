@@ -75,7 +75,15 @@ CREATE TABLE IF NOT EXISTS scenarios (
     -- and sent along at save time rather than recomputed server-side - it's
     -- many times more expensive than a single solve. Null for scenarios
     -- saved before this existed, or saved before the analysis finished.
-    dof_json TEXT
+    dof_json TEXT,
+    -- Ordered list of {key, enabled} objects (see schemas.ObjectiveSetting)
+    -- describing the solver's priority order for this snapshot - order is
+    -- itself meaningful data, so it's one JSON blob rather than a column per
+    -- objective. Null for rows saved before this existed; those were solved
+    -- under the historical fixed order, so they're treated as
+    -- schemas.DEFAULT_OBJECTIVES (assigned > preference > balance, all
+    -- enabled) wherever this is read.
+    objectives_json TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_scenarios_roster_id ON scenarios(roster_id);

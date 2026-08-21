@@ -543,6 +543,11 @@ def _fake_dof():
             {"position": "C", "slots_filled": 1, "extra_options": 1, "candidates_checked": 2},
             {"position": "RW", "slots_filled": 1, "extra_options": 1, "candidates_checked": 2},
         ],
+        "objectives": [
+            {"key": "assigned", "enabled": True},
+            {"key": "preference", "enabled": True},
+            {"key": "balance", "enabled": True},
+        ],
     }
 
 

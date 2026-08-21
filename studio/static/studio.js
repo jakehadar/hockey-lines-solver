@@ -14,6 +14,22 @@
   // three source columns weren't cross-checked against each other).
   const POSITION_FIELDS = ["preferred_positions", "secondary_positions", "unwilling_positions"];
 
+  // Mirrors schemas.DEFAULT_OBJECTIVES - the historical fixed priority order
+  // (assigned > preference > balance, all enabled). Server-side is the
+  // source of truth for what a solve actually used (see lastResult.objectives
+  // / OBJECTIVE_SHORT_LABELS below); this is only the client's starting point.
+  const DEFAULT_OBJECTIVES = [
+    { key: "assigned", enabled: true },
+    { key: "preference", enabled: true },
+    { key: "balance", enabled: true },
+  ];
+  const OBJECTIVE_LABELS = {
+    assigned: "Maximize players assigned",
+    preference: "Maximize position preferences",
+    balance: "Balance experience across lines",
+  };
+  const OBJECTIVE_SHORT_LABELS = { assigned: "Assigned", preference: "Preference", balance: "Balance" };
+
   function dedupePositions(player) {
     for (const pos of POSITIONS) {
       let claimed = false;
@@ -32,6 +48,7 @@
   // storage access can throw (private browsing, blocked site data, etc.).
   const MODE_STORAGE_KEY = "studio.lastMode." + ROSTER_ID;
   const AUTO_SOLVE_STORAGE_KEY = "studio.autoSolve";
+  const OBJECTIVES_OPEN_STORAGE_KEY = "studio.objectivesOpen." + ROSTER_ID;
 
   function loadStoredMode() {
     try {
@@ -68,6 +85,22 @@
     }
   }
 
+  function loadStoredObjectivesOpen() {
+    try {
+      return localStorage.getItem(OBJECTIVES_OPEN_STORAGE_KEY) === "1";
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function storeObjectivesOpen(isOpen) {
+    try {
+      localStorage.setItem(OBJECTIVES_OPEN_STORAGE_KEY, isOpen ? "1" : "0");
+    } catch (e) {
+      // Best-effort, same as storeMode.
+    }
+  }
+
   // rosterBaseline is the roster's own saved players - the only baseline
   // Roster mode ever compares against, and what Reset always falls back to.
   let rosterBaseline = JSON.parse(JSON.stringify(window.INITIAL_ROSTER));
@@ -82,7 +115,9 @@
   // fresh scenario session starts from the current roster). Switching INTO
   // Scenario mode always resets `players` to this, never carries over
   // unsaved edits from a previous visit to the mode.
-  let loadedScenario = serverLoadedScenario ? { id: serverLoadedScenario.id, title: serverLoadedScenario.title } : null;
+  let loadedScenario = serverLoadedScenario
+    ? { id: serverLoadedScenario.id, title: serverLoadedScenario.title, parent_scenario_id: serverLoadedScenario.parent_scenario_id }
+    : null;
   let scenarioOrigin = serverLoadedScenario
     ? JSON.parse(JSON.stringify(serverLoadedScenario.players))
     : JSON.parse(JSON.stringify(rosterBaseline));
@@ -98,10 +133,20 @@
         time_limit: serverLoadedScenario.time_limit,
         allow_oop: serverLoadedScenario.allow_oop,
         allow_unwilling: serverLoadedScenario.allow_unwilling,
+        objectives: serverLoadedScenario.objectives,
         result: serverLoadedScenario.result,
         dof: serverLoadedScenario.dof,
       }
     : null;
+
+  // The live "Objectives" panel state - order is priority (index 0 =
+  // highest). Restored from a loaded scenario's snapshot if present,
+  // otherwise the historical default. Kept separate from currentSettings()'s
+  // other fields only because it's an array that needs its own render pass.
+  let objectiveOrder = (serverLoadedScenario && serverLoadedScenario.objectives
+    ? serverLoadedScenario.objectives
+    : DEFAULT_OBJECTIVES
+  ).map((o) => ({ key: o.key, enabled: o.enabled }));
 
   // Loading a scenario only ever makes sense in Scenario mode, full stop -
   // otherwise fall back to whatever this browser last had this roster in,
@@ -120,8 +165,16 @@
   // on screen - from the moment an edit schedules a solve (even before the
   // debounce timer fires) until that solve's response comes back.
   let resultPending = !serverLoadedScenario;
-  let scenarioTitles = (window.EXISTING_SCENARIO_TITLES || []).slice();
-  let pendingModeSwitch = null;
+  // {id, title} for every scenario on this roster - drives both the
+  // "Scenario N" uniqueness check below and the heading dropdown's
+  // "jump to a different scenario" list.
+  let scenarioList = (window.SCENARIO_LIST || []).slice();
+  let scenarioTitles = scenarioList.map((s) => s.title);
+  // { type: "mode", target } for the Roster/Scenario toggle, or
+  // { type: "navigate", url } for a plain link (Scenarios, Rosters) - either
+  // way, this is what the unsaved-changes dialog carries out once the user
+  // picks Discard or Save.
+  let pendingAction = null;
 
   const tbody = document.getElementById("roster-tbody");
   const gridEl = document.getElementById("grid");
@@ -168,8 +221,10 @@
   const saveMenu = document.getElementById("save-menu");
   const saveMenuToggle = document.getElementById("save-menu-toggle");
   const saveAltBtn = document.getElementById("save-alt-btn");
+  const saveAsBtn = document.getElementById("save-as-btn");
   const scenarioDialog = document.getElementById("scenario-dialog");
   const scenarioDialogTitle = document.getElementById("scenario-dialog-title");
+  const scenarioDialogSubtitle = document.getElementById("scenario-dialog-subtitle");
   const scenarioForm = document.getElementById("scenario-form");
   const scenarioTitleInput = document.getElementById("scenario-title");
   const scenarioDescriptionInput = document.getElementById("scenario-description");
@@ -207,20 +262,30 @@
     const disabled = mode === "scenario" && resultPending;
     saveBtn.disabled = disabled;
     saveAltBtn.disabled = disabled;
+    saveAsBtn.disabled = disabled;
     saveMenuToggle.disabled = disabled;
-    // Also covers "Solve now": a solve already in flight (or about to be,
+    // Also covers "Solve": a solve already in flight (or about to be,
     // once the debounce timer fires) shouldn't be kickable again on top of
     // itself.
     solveNowBtn.disabled = disabled;
   }
 
   function updateSaveButtonLabels() {
+    // "Save"/"Save as…" in both modes - which mode is active is already
+    // shown by the mode toggle right next to these buttons, so repeating
+    // "roster"/"scenario" in the label itself is redundant.
+    saveBtn.textContent = "Save";
     if (mode === "roster") {
-      saveBtn.textContent = "Save roster";
-      saveAltBtn.textContent = "Save roster as…";
+      saveAltBtn.textContent = "Save as…";
+      saveAsBtn.hidden = true;
     } else {
-      saveBtn.textContent = "Save scenario";
-      saveAltBtn.textContent = "Branch scenario…";
+      // "Branch…" makes a new scenario as a child of the currently loaded
+      // one (or a fresh root if nothing's loaded); "Save as…" makes a new
+      // scenario as a *sibling* of it (same parent) - two different
+      // lineage operations, so they get two distinct menu items rather
+      // than folding "Save as…" into Branch.
+      saveAltBtn.textContent = "Branch…";
+      saveAsBtn.hidden = false;
     }
   }
 
@@ -234,6 +299,100 @@
     }
   }
 
+  // Reset means "discard my in-progress edits," not "abandon what's loaded" -
+  // it reverts to scenarioOrigin (the loaded scenario's last-saved snapshot,
+  // or the roster baseline if nothing's loaded) without unloading a loaded
+  // scenario. That's easy to misread as "go back to the roster" given the
+  // tree of branches a scenario can sit in, so the tooltip spells out
+  // exactly where it lands - kept in sync wherever updatePanelHeading() is,
+  // since both depend on the same mode/loadedScenario state.
+  function updateResetTooltip() {
+    if (mode === "roster") {
+      resetBtn.title = "Discard in-progress edits and revert to the last-saved roster.";
+    } else if (loadedScenario) {
+      resetBtn.title = 'Discard in-progress edits and revert to scenario "' + loadedScenario.title + '" as last saved (stays loaded).';
+    } else {
+      resetBtn.title = "Discard in-progress edits and revert to the current roster.";
+    }
+  }
+
+  // --- Scenario heading dropdown ------------------------------------------
+  //
+  // The "Roster"/"Scenario: X" heading doubles as a navigation menu in
+  // Scenario mode: unload back to the roster baseline, or jump to a
+  // different scenario on this roster. Deliberately not a real button (see
+  // .panel-heading-group's CSS) - it's a title first, so it only grows a
+  // small caret rather than button chrome, and only when there's actually
+  // somewhere to go.
+
+  const panelHeadingGroup = document.getElementById("panel-heading-group");
+  const scenarioHeadingCaret = document.getElementById("scenario-heading-caret");
+  const scenarioHeadingMenu = document.getElementById("scenario-heading-menu");
+
+  function closeScenarioHeadingMenu() {
+    scenarioHeadingMenu.classList.remove("open");
+    scenarioHeadingCaret.setAttribute("aria-expanded", "false");
+  }
+
+  function renderScenarioHeadingMenu() {
+    const items = [];
+    if (loadedScenario) {
+      items.push('<button type="button" class="heading-menu-item" data-action="unload">Unload (start fresh from roster)</button>');
+    }
+    const others = scenarioList.filter((s) => !loadedScenario || s.id !== loadedScenario.id);
+    if (others.length) {
+      if (items.length) items.push('<div class="heading-menu-divider"></div>');
+      for (const s of others) {
+        items.push('<button type="button" class="heading-menu-item" data-action="load" data-id="' + s.id + '">' + s.title + "</button>");
+      }
+    }
+    if (!items.length) {
+      items.push('<div class="heading-menu-empty">No other scenarios yet.</div>');
+    }
+    scenarioHeadingMenu.innerHTML = items.join("");
+  }
+
+  // Whether there's anything useful to show - kept in sync everywhere
+  // updatePanelHeading() runs, since both depend on the same mode/
+  // loadedScenario/scenarioList state.
+  function updateScenarioHeadingMenuAvailability() {
+    const available = mode === "scenario" && (loadedScenario || scenarioList.length > 0);
+    scenarioHeadingCaret.hidden = !available;
+    panelHeadingGroup.classList.toggle("has-menu", available);
+    if (!available) closeScenarioHeadingMenu();
+  }
+
+  panelHeadingGroup.addEventListener("click", (e) => {
+    if (!panelHeadingGroup.classList.contains("has-menu")) return;
+    e.stopPropagation();
+    if (scenarioHeadingMenu.classList.contains("open")) {
+      closeScenarioHeadingMenu();
+      return;
+    }
+    renderScenarioHeadingMenu();
+    scenarioHeadingMenu.classList.add("open");
+    scenarioHeadingCaret.setAttribute("aria-expanded", "true");
+  });
+
+  scenarioHeadingMenu.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-action]");
+    if (!btn) return;
+    closeScenarioHeadingMenu();
+    if (btn.dataset.action === "unload") {
+      requestNavigate(STUDIO_BASE);
+    } else if (btn.dataset.action === "load") {
+      requestNavigate(STUDIO_BASE + "?load_scenario=" + btn.dataset.id);
+    }
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!panelHeadingGroup.contains(e.target)) closeScenarioHeadingMenu();
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeScenarioHeadingMenu();
+  });
+
   function currentSettings() {
     return {
       forwards: parseInt(document.getElementById("setting-forwards").value, 10) || 0,
@@ -241,7 +400,82 @@
       time_limit: parseInt(document.getElementById("setting-time-limit").value, 10) || 5,
       allow_oop: document.getElementById("setting-allow-oop").checked,
       allow_unwilling: document.getElementById("setting-allow-unwilling").checked,
+      objectives: objectiveOrder.map((o) => ({ key: o.key, enabled: o.enabled })),
     };
+  }
+
+  // --- Objectives panel -------------------------------------------------
+
+  const objectivesListEl = document.getElementById("objectives-list");
+  const objectivesUsedEl = document.getElementById("objectives-used");
+  const objectivesDetailsEl = document.getElementById("objectives-details");
+
+  // Open/closed state is a per-browser, per-roster preference (same
+  // localStorage pattern as mode/auto-solve above), not roster data - so it
+  // persists across visits without needing a server round-trip.
+  objectivesDetailsEl.open = loadStoredObjectivesOpen();
+  objectivesDetailsEl.addEventListener("toggle", () => {
+    storeObjectivesOpen(objectivesDetailsEl.open);
+  });
+
+  function renderObjectives() {
+    const enabledCount = objectiveOrder.filter((o) => o.enabled).length;
+    objectivesListEl.innerHTML = objectiveOrder
+      .map((o, idx) => {
+        const lastEnabled = o.enabled && enabledCount === 1;
+        return (
+          '<li data-key="' + o.key + '"' + (o.enabled ? "" : ' class="objective-disabled"') + '>' +
+          '<label><input type="checkbox" data-action="toggle"' +
+          (o.enabled ? " checked" : "") +
+          (lastEnabled ? " disabled title=\"At least one objective must stay on\"" : "") +
+          "> " + OBJECTIVE_LABELS[o.key] + "</label>" +
+          '<span class="objective-reorder">' +
+          '<button type="button" data-action="up"' + (idx === 0 ? " disabled" : "") + ' aria-label="Move up">&uarr;</button>' +
+          '<button type="button" data-action="down"' + (idx === objectiveOrder.length - 1 ? " disabled" : "") + ' aria-label="Move down">&darr;</button>' +
+          "</span></li>"
+        );
+      })
+      .join("");
+  }
+
+  objectivesListEl.addEventListener("change", (e) => {
+    if (e.target.dataset.action !== "toggle") return;
+    const li = e.target.closest("li[data-key]");
+    const entry = objectiveOrder.find((o) => o.key === li.dataset.key);
+    entry.enabled = e.target.checked;
+    renderObjectives();
+    scheduleSolve();
+  });
+
+  objectivesListEl.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-action]");
+    if (!btn) return;
+    const li = btn.closest("li[data-key]");
+    const idx = objectiveOrder.findIndex((o) => o.key === li.dataset.key);
+    const swapIdx = idx + (btn.dataset.action === "up" ? -1 : 1);
+    if (swapIdx < 0 || swapIdx >= objectiveOrder.length) return;
+    [objectiveOrder[idx], objectiveOrder[swapIdx]] = [objectiveOrder[swapIdx], objectiveOrder[idx]];
+    renderObjectives();
+    scheduleSolve();
+  });
+
+  renderObjectives();
+
+  // Sourced from lastResult.objectives (what the server actually solved
+  // with), not the live objectiveOrder panel state - those can diverge, e.g.
+  // right after loading a scenario whose snapshot used a different order
+  // than whatever the panel currently shows.
+  function renderObjectivesUsed() {
+    const objectives = lastResult && lastResult.objectives;
+    if (mode !== "scenario" || !objectives || lastResult.status === "NO_SOLUTION") {
+      objectivesUsedEl.textContent = "";
+      return;
+    }
+    const active = objectives.filter((o) => o.enabled).map((o) => OBJECTIVE_SHORT_LABELS[o.key]);
+    const off = objectives.filter((o) => !o.enabled).map((o) => OBJECTIVE_SHORT_LABELS[o.key]);
+    let text = "Priority: " + active.join(" > ");
+    if (off.length) text += "  ·  off: " + off.join(", ");
+    objectivesUsedEl.textContent = text;
   }
 
   function nextScenarioTitle() {
@@ -389,6 +623,7 @@
   }
 
   function renderGrid() {
+    renderObjectivesUsed();
     if (!lastResult || lastResult.status === "NO_SOLUTION") {
       gridEl.innerHTML = '<p class="empty">No lines to show.</p>';
       summaryEl.innerHTML = "";
@@ -529,6 +764,7 @@
         time_limit: settings.time_limit,
         allow_oop: settings.allow_oop,
         allow_unwilling: settings.allow_unwilling,
+        objectives: settings.objectives,
       }),
     });
     lastResult = resp.ok ? await resp.json() : { status: "NO_SOLUTION" };
@@ -595,6 +831,7 @@
           time_limit: settings.time_limit,
           allow_oop: settings.allow_oop,
           allow_unwilling: settings.allow_unwilling,
+          objectives: settings.objectives,
           job_id: jobId,
         }),
         signal: controller.signal,
@@ -731,24 +968,23 @@
   });
 
   function doReset() {
-    if (mode === "scenario") {
-      loadedScenario = null;
-      scenarioOrigin = JSON.parse(JSON.stringify(rosterBaseline));
-      scenarioOriginMeta = null;
-      updatePanelHeading();
-      updateSaveButtonLabels();
-    }
-    players = JSON.parse(JSON.stringify(rosterBaseline));
     if (mode === "roster") {
+      players = JSON.parse(JSON.stringify(rosterBaseline));
       titleInput.value = rosterTitleBaseline;
       autosizeTitleInput();
       lastResult = null;
       hideDof();
       render();
-    } else {
-      render();
-      doSolve(); // always re-solve after a reset, regardless of the auto-solve toggle
+      return;
     }
+    // Scenario mode: revert to scenarioOrigin (the loaded scenario's
+    // last-saved snapshot, or the roster baseline if nothing's loaded) -
+    // discards in-progress edits without unloading whatever's loaded. Same
+    // "undo my edits" meaning Reset has everywhere else in the app, rather
+    // than "abandon my place in the scenario tree."
+    players = JSON.parse(JSON.stringify(scenarioOrigin));
+    cancelDof(); // in case an edit mid-discard had a solve/dof already in flight
+    loadScenarioCleanState();
   }
 
   resetBtn.addEventListener("click", doReset);
@@ -816,6 +1052,7 @@
         time_limit: settings.time_limit,
         allow_oop: settings.allow_oop,
         allow_unwilling: settings.allow_unwilling,
+        objectives: settings.objectives,
         result: lastResult,
         dof: dofPending ? null : lastDofResult,
       }),
@@ -831,6 +1068,7 @@
       time_limit: settings.time_limit,
       allow_oop: settings.allow_oop,
       allow_unwilling: settings.allow_unwilling,
+      objectives: settings.objectives,
       result: lastResult,
       dof: dofPending ? null : lastDofResult,
     };
@@ -838,9 +1076,39 @@
     return true;
   }
 
-  function openScenarioDialog(isBranch) {
-    scenarioDialogTitle.textContent = isBranch ? "Branch scenario" : "Save as scenario";
-    scenarioSubmitBtn.textContent = isBranch ? "Branch scenario" : "Save scenario";
+  // Three distinct ways to create a *new* scenario row, distinguished by
+  // what parent_scenario_id they end up with:
+  //   "save"     - the plain first save when nothing's loaded yet. No
+  //                lineage to inherit, so parent is always null.
+  //   "branch"   - a child of the currently loaded scenario (or a fresh
+  //                root if nothing's loaded).
+  //   "save-as"  - a *sibling* of the currently loaded scenario: same
+  //                parent as it has (or null, matching it, if it has none).
+  let scenarioDialogKind = "save";
+
+  function parentForDialogKind(kind) {
+    if (kind === "branch") return loadedScenario ? loadedScenario.id : null;
+    if (kind === "save-as") return loadedScenario ? loadedScenario.parent_scenario_id ?? null : null;
+    return null;
+  }
+
+  function subtitleForDialogKind(kind) {
+    if (kind === "branch") {
+      return loadedScenario ? "Branching from “" + loadedScenario.title + "”." : "This will start a new branch.";
+    }
+    if (kind === "save-as") {
+      return loadedScenario ? "Same parent as “" + loadedScenario.title + "”." : "This will start a new scenario.";
+    }
+    return "";
+  }
+
+  function openScenarioDialog(kind) {
+    scenarioDialogKind = kind;
+    const titles = { save: "Save as scenario", branch: "Branch scenario", "save-as": "Save as" };
+    const submitLabels = { save: "Save", branch: "Branch", "save-as": "Save as" };
+    scenarioDialogTitle.textContent = titles[kind];
+    scenarioSubmitBtn.textContent = submitLabels[kind];
+    scenarioDialogSubtitle.textContent = subtitleForDialogKind(kind);
     scenarioTitleInput.value = nextScenarioTitle();
     scenarioDescriptionInput.value = "";
     scenarioDialog.showModal();
@@ -849,7 +1117,7 @@
   }
 
   document.getElementById("scenario-cancel-btn").addEventListener("click", () => {
-    pendingModeSwitch = null;
+    pendingAction = null;
     scenarioDialog.close();
   });
 
@@ -858,6 +1126,7 @@
     const title = scenarioTitleInput.value.trim();
     if (!title) return;
     const settings = currentSettings();
+    const parentId = parentForDialogKind(scenarioDialogKind);
     const resp = await fetch(STUDIO_BASE + "/scenarios", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -870,15 +1139,17 @@
         time_limit: settings.time_limit,
         allow_oop: settings.allow_oop,
         allow_unwilling: settings.allow_unwilling,
+        objectives: settings.objectives,
         result: lastResult,
         dof: dofPending ? null : lastDofResult,
-        parent_scenario_id: loadedScenario ? loadedScenario.id : null,
+        parent_scenario_id: parentId,
       }),
     });
     if (resp.ok) {
       const data = await resp.json();
       scenarioTitles.push(title);
-      loadedScenario = { id: data.scenario_id, title: title };
+      scenarioList.push({ id: data.scenario_id, title: title });
+      loadedScenario = { id: data.scenario_id, title: title, parent_scenario_id: parentId };
       scenarioOrigin = JSON.parse(JSON.stringify(players));
       scenarioOriginMeta = {
         forwards: settings.forwards,
@@ -886,18 +1157,17 @@
         time_limit: settings.time_limit,
         allow_oop: settings.allow_oop,
         allow_unwilling: settings.allow_unwilling,
+        objectives: settings.objectives,
         result: lastResult,
         dof: dofPending ? null : lastDofResult,
       };
       updatePanelHeading();
+      updateResetTooltip();
+      updateScenarioHeadingMenuAvailability();
       updateSaveButtonLabels();
       updateDirtyState();
       scenarioDialog.close();
-      if (pendingModeSwitch) {
-        const target = pendingModeSwitch;
-        pendingModeSwitch = null;
-        enterMode(target);
-      }
+      applyPendingAction();
     } else {
       alert("Save scenario failed.");
     }
@@ -912,7 +1182,7 @@
     } else if (loadedScenario) {
       overwriteLoadedScenario();
     } else {
-      openScenarioDialog(false);
+      openScenarioDialog("save");
     }
   });
 
@@ -944,8 +1214,14 @@
     if (mode === "roster") {
       saveRosterAs();
     } else {
-      openScenarioDialog(true);
+      openScenarioDialog("branch");
     }
+  });
+
+  saveAsBtn.addEventListener("click", () => {
+    closeSaveMenu();
+    if (saveAsBtn.disabled) return;
+    openScenarioDialog("save-as");
   });
 
   // --- Mode switching ----------------------------------------------------
@@ -958,20 +1234,19 @@
     }
     titleInput.readOnly = mode === "scenario";
     updatePanelHeading();
+    updateResetTooltip();
+    updateScenarioHeadingMenuAvailability();
     updateSaveButtonLabels();
   }
 
-  function enterMode(newMode) {
-    mode = newMode;
-    players = JSON.parse(JSON.stringify(currentOrigin()));
-    applyModeUI();
-    if (mode === "roster") {
-      lastResult = null;
-      hideDof();
-      render();
-    } else if (scenarioOriginMeta) {
-      // A scenario is loaded and its cached result still matches
-      // scenarioOrigin (nothing's touched it since) - reuse it as-is.
+  // Populates the settings panel + result/dof for scenarioOrigin: either
+  // restored from scenarioOriginMeta's cache (a loaded scenario whose
+  // snapshot still matches what's on screen), or a fresh solve if nothing's
+  // cached (nothing loaded, or a cache doReset() just intentionally
+  // restored to). Shared by enterMode() (switching into Scenario mode) and
+  // doReset() (reverting to the same clean state without switching modes).
+  function loadScenarioCleanState() {
+    if (scenarioOriginMeta) {
       document.getElementById("setting-forwards").value = scenarioOriginMeta.forwards;
       document.getElementById("setting-defense").value = scenarioOriginMeta.defense;
       document.getElementById("setting-time-limit").value = scenarioOriginMeta.time_limit;
@@ -981,6 +1256,11 @@
       // scenario, or one from before this setting existed) must read as
       // unchecked, not checked.
       document.getElementById("setting-allow-unwilling").checked = scenarioOriginMeta.allow_unwilling === true;
+      // Same fallback direction as allow_oop: an older cached scenario saved
+      // before this setting existed has no objectives field, so fall back to
+      // the historical default order rather than leaving the panel empty.
+      objectiveOrder = (scenarioOriginMeta.objectives || DEFAULT_OBJECTIVES).map((o) => ({ key: o.key, enabled: o.enabled }));
+      renderObjectives();
       lastResult = scenarioOriginMeta.result;
       resultPending = false;
       render();
@@ -995,7 +1275,42 @@
       render();
       doSolve();
     }
+  }
+
+  function enterMode(newMode) {
+    mode = newMode;
+    players = JSON.parse(JSON.stringify(currentOrigin()));
+    applyModeUI();
+    if (mode === "roster") {
+      lastResult = null;
+      hideDof();
+      render();
+    } else {
+      loadScenarioCleanState();
+    }
     storeMode(mode);
+  }
+
+  // Carries out whatever's pending after the unsaved-changes dialog resolves
+  // (Discard, or a successful Save) - a mode switch or a plain navigation,
+  // whichever requested it. No-op if nothing's pending (e.g. a save
+  // triggered directly from the scenario-dialog "Save" flow, not via this
+  // confirmation path).
+  function applyPendingAction() {
+    const action = pendingAction;
+    pendingAction = null;
+    if (!action) return;
+    if (action.type === "mode") enterMode(action.target);
+    else if (action.type === "navigate") window.location = action.url;
+  }
+
+  function confirmUnsavedChanges(action) {
+    pendingAction = action;
+    unsavedDialogBody.textContent =
+      mode === "roster"
+        ? "You have unsaved roster changes. Save them, discard them, or stay here?"
+        : "You have unsaved scenario changes. Save them, discard them, or stay here?";
+    unsavedDialog.showModal();
   }
 
   function requestModeSwitch(target) {
@@ -1004,12 +1319,18 @@
       enterMode(target);
       return;
     }
-    pendingModeSwitch = target;
-    unsavedDialogBody.textContent =
-      mode === "roster"
-        ? "You have unsaved roster changes. Save them, discard them, or stay here?"
-        : "You have unsaved scenario changes. Save them, discard them, or stay here?";
-    unsavedDialog.showModal();
+    confirmUnsavedChanges({ type: "mode", target });
+  }
+
+  // Same guard for plain navigation links (Scenarios, Rosters) - leaving the
+  // editor entirely is just as capable of silently dropping in-progress
+  // edits as switching modes is.
+  function requestNavigate(url) {
+    if (!isDirty()) {
+      window.location = url;
+      return;
+    }
+    confirmUnsavedChanges({ type: "navigate", url });
   }
 
   modeToggle.addEventListener("click", (e) => {
@@ -1018,31 +1339,34 @@
     requestModeSwitch(btn.dataset.mode);
   });
 
+  for (const link of document.querySelectorAll(".back-link, .scenarios-link")) {
+    link.addEventListener("click", (e) => {
+      e.preventDefault();
+      requestNavigate(link.href);
+    });
+  }
+
   document.getElementById("unsaved-cancel-btn").addEventListener("click", () => {
-    pendingModeSwitch = null;
+    pendingAction = null;
     unsavedDialog.close();
   });
 
   document.getElementById("unsaved-discard-btn").addEventListener("click", () => {
-    const target = pendingModeSwitch;
-    pendingModeSwitch = null;
     unsavedDialog.close();
-    enterMode(target);
+    applyPendingAction();
   });
 
   document.getElementById("unsaved-save-btn").addEventListener("click", async () => {
     unsavedDialog.close();
     if (mode === "scenario" && !loadedScenario) {
       // Nothing loaded to silently overwrite - fall back to the full
-      // Save-as-scenario dialog. pendingModeSwitch stays set so the
-      // originally requested switch still happens once that's submitted.
-      openScenarioDialog(false);
+      // Save-as-scenario dialog. pendingAction stays set so the originally
+      // requested switch/navigation still happens once that's submitted.
+      openScenarioDialog("save");
       return;
     }
-    const target = pendingModeSwitch;
-    pendingModeSwitch = null;
     const ok = mode === "roster" ? await saveRoster() : await overwriteLoadedScenario();
-    if (ok) enterMode(target);
+    if (ok) applyPendingAction();
   });
 
   // --- Initial paint ------------------------------------------------------

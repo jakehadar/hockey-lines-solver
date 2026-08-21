@@ -23,8 +23,10 @@ from pydantic import ValidationError
 
 import dof
 import solver
-from schemas import PlayerIn, ScenarioSave, ScenarioUpdate, SolveRequest
+from schemas import DEFAULT_OBJECTIVES, PlayerIn, ScenarioSave, ScenarioUpdate, SolveRequest
 from studio import db
+
+_DEFAULT_OBJECTIVES_DUMP = [o.model_dump() for o in DEFAULT_OBJECTIVES]
 
 POSITIONS = ["LW", "C", "RW", "LD", "RD"]
 WORKSPACE_COOKIE = "workspace_token"
@@ -44,6 +46,18 @@ SAMPLE_ROSTER_CSV = Path(__file__).resolve().parent.parent / "rosters" / "sample
 SAMPLE_ROSTER_TITLE = "Sample Roster"
 
 app = Flask(__name__)
+# Off by default (tied to app.debug, which stays False here - this app binds
+# to 0.0.0.0 for LAN access, and Flask's interactive debugger is a remote
+# code execution risk on any interface other than localhost, so debug=True
+# is never appropriate here). Auto-reloading templates has no such risk -
+# it's just always reading the file from disk - so it's turned on
+# unconditionally: without it, a long-running dev process silently freezes
+# whatever templates/*.html looked like at first render and never picks up
+# edits again until restarted, which is exactly what happened here (see the
+# "disable preferences objective" scenario investigation - the running
+# process had cached studio.html from mid-edit, causing a null-element JS
+# crash on load, not a data problem).
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 
 @app.url_value_preprocessor
@@ -312,7 +326,7 @@ def studio_view(roster_id: int):
     if roster is None:
         abort(404)
     players = [_row_to_player_in_dict(r) for r in db.list_players(roster_id)]
-    scenario_titles = [s["title"] for s in db.list_scenarios(roster_id)]
+    scenario_list = [{"id": s["id"], "title": s["title"]} for s in db.list_scenarios(roster_id)]
 
     loaded_scenario = None
     load_scenario_id = request.args.get("load_scenario")
@@ -323,12 +337,14 @@ def studio_view(roster_id: int):
         loaded_scenario = {
             "id": scenario["id"],
             "title": scenario["title"],
+            "parent_scenario_id": scenario["parent_scenario_id"],
             "players": json.loads(scenario["players_json"]),
             "forwards": scenario["forwards"],
             "defense": scenario["defense"],
             "time_limit": scenario["time_limit"],
             "allow_oop": bool(scenario["allow_oop"]),
             "allow_unwilling": bool(scenario["allow_unwilling"]),
+            "objectives": json.loads(scenario["objectives_json"]) if scenario["objectives_json"] else _DEFAULT_OBJECTIVES_DUMP,
             "result": json.loads(scenario["result_json"]),
             "dof": json.loads(scenario["dof_json"]) if scenario["dof_json"] else None,
         }
@@ -338,7 +354,7 @@ def studio_view(roster_id: int):
         roster=roster,
         players=players,
         positions=POSITIONS,
-        scenario_titles=scenario_titles,
+        scenario_list=scenario_list,
         loaded_scenario=loaded_scenario,
     )
 
@@ -358,7 +374,7 @@ def studio_solve(roster_id: int):
     players = solver.players_from_player_in(req.players)
     result = solver.solve_lines(
         players, req.forwards, req.defense, req.time_limit,
-        allow_oop=req.allow_oop, allow_unwilling=req.allow_unwilling,
+        allow_oop=req.allow_oop, allow_unwilling=req.allow_unwilling, objectives=req.objectives,
     )
     return jsonify(result.model_dump())
 
@@ -386,7 +402,8 @@ def studio_degrees_of_freedom(roster_id: int):
     try:
         result = dof.compute_degrees_of_freedom(
             players, req.forwards, req.defense, req.time_limit,
-            allow_oop=req.allow_oop, allow_unwilling=req.allow_unwilling, cancel_event=cancel_event
+            allow_oop=req.allow_oop, allow_unwilling=req.allow_unwilling, objectives=req.objectives,
+            cancel_event=cancel_event,
         )
     finally:
         if job_id:
@@ -399,6 +416,7 @@ def studio_degrees_of_freedom(roster_id: int):
             "total_extra_options": result.total_extra_options,
             "total_filled_slots": result.total_filled_slots,
             "score_per_slot": result.score_per_slot,
+            "objectives": [o.model_dump() for o in result.objectives],
             "by_position": [
                 {
                     "position": pf.position,
@@ -482,6 +500,7 @@ def scenarios_create(roster_id: int):
         dof_json=req.dof.model_dump_json() if req.dof else None,
         allow_oop=req.allow_oop,
         allow_unwilling=req.allow_unwilling,
+        objectives_json=json.dumps([o.model_dump() for o in req.objectives]),
     )
     return jsonify({"scenario_id": scenario_id})
 
@@ -511,6 +530,7 @@ def scenarios_update(roster_id: int, scenario_id: int):
         dof_json=req.dof.model_dump_json() if req.dof else None,
         allow_oop=req.allow_oop,
         allow_unwilling=req.allow_unwilling,
+        objectives_json=json.dumps([o.model_dump() for o in req.objectives]),
     )
     return jsonify({"scenario_id": scenario_id})
 
@@ -557,6 +577,7 @@ def scenarios_compare(roster_id: int):
             "time_limit": s["time_limit"],
             "allow_oop": bool(s["allow_oop"]),
             "allow_unwilling": bool(s["allow_unwilling"]),
+            "objectives": json.loads(s["objectives_json"]) if s["objectives_json"] else _DEFAULT_OBJECTIVES_DUMP,
             "load_url": url_for("studio_view", roster_id=roster_id, load_scenario=s["id"]),
             "result": json.loads(s["result_json"]),
             "dof": json.loads(s["dof_json"]) if s["dof_json"] else None,

@@ -4,7 +4,38 @@ from __future__ import annotations
 
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+class ObjectiveSetting(BaseModel):
+    """One entry in the solver's priority order - see solve_lines()'s
+    docstring for how order+enabled map to actual objective weights."""
+
+    key: Literal["assigned", "preference", "balance"] = Field(
+        ..., description="'assigned' = maximize players assigned a slot, 'preference' = maximize preferred/secondary position matches, 'balance' = minimize experience imbalance across forward lines."
+    )
+    enabled: bool = Field(True, description="If False, this objective is dropped from the solve entirely rather than just deprioritized.")
+
+
+# The historical fixed order (W1 >> W2 >> W3), now expressed as data instead
+# of hardcoded weight constants. SolveRequest.objectives defaults to this so
+# existing callers (api.py, old saved scenarios) get identical behavior.
+DEFAULT_OBJECTIVES: List[ObjectiveSetting] = [
+    ObjectiveSetting(key="assigned", enabled=True),
+    ObjectiveSetting(key="preference", enabled=True),
+    ObjectiveSetting(key="balance", enabled=True),
+]
+
+_OBJECTIVE_KEYS = {"assigned", "preference", "balance"}
+
+
+def _validate_objectives(value: List[ObjectiveSetting]) -> List[ObjectiveSetting]:
+    keys = [o.key for o in value]
+    if set(keys) != _OBJECTIVE_KEYS or len(keys) != len(_OBJECTIVE_KEYS):
+        raise ValueError(f"objectives must contain exactly one entry for each of {sorted(_OBJECTIVE_KEYS)}.")
+    if not any(o.enabled for o in value):
+        raise ValueError("at least one objective must remain enabled.")
+    return value
 
 
 class PlayerIn(BaseModel):
@@ -56,6 +87,17 @@ class SolveRequest(BaseModel):
             "stronger signal than an untagged position, so overriding it requires explicit opt-in."
         ),
     )
+    objectives: List[ObjectiveSetting] = Field(
+        default_factory=lambda: list(DEFAULT_OBJECTIVES),
+        description=(
+            "Priority order for the solver's objective, highest priority first. Must contain exactly "
+            "one entry for each of 'assigned', 'preference', 'balance', and at least one must be "
+            "enabled. Defaults to the historical fixed order (assigned > preference > balance), all "
+            "enabled."
+        ),
+    )
+
+    _validate_objectives = field_validator("objectives")(_validate_objectives)
 
 
 class SlotAssignment(BaseModel):
@@ -116,6 +158,10 @@ class SolveResponse(BaseModel):
     summary: SolveSummary = Field(..., description="Aggregate stats for this solve.")
     forward_lines: List[ForwardLine] = Field(..., description="Forward line assignments, in line order.")
     defense_pairs: List[DefensePair] = Field(..., description="Defense pair assignments, in pair order.")
+    objectives: List[ObjectiveSetting] = Field(
+        default_factory=lambda: list(DEFAULT_OBJECTIVES),
+        description="The priority order actually used to produce this result - echoes the request's objectives (or the default, if omitted).",
+    )
 
 
 class PositionFlexibility(BaseModel):
@@ -137,6 +183,10 @@ class DofSummary(BaseModel):
     total_filled_slots: int = Field(..., description="Total slots filled in the baseline solve.")
     score_per_slot: float = Field(..., description="total_extra_options / total_filled_slots.")
     by_position: List[PositionFlexibility] = Field(..., description="Per-position breakdown, in LW/C/RW/LD/RD order.")
+    objectives: List[ObjectiveSetting] = Field(
+        default_factory=lambda: list(DEFAULT_OBJECTIVES),
+        description="The priority order used for both the baseline solve and the tie-break comparison against candidate substitutions.",
+    )
 
 
 class ScenarioUpdate(SolveRequest):

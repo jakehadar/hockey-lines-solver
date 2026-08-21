@@ -32,7 +32,7 @@ def test_solve_json_returns_json():
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] in ("OPTIMAL", "FEASIBLE")
-    assert set(body.keys()) == {"status", "summary", "forward_lines", "defense_pairs"}
+    assert set(body.keys()) == {"status", "summary", "forward_lines", "defense_pairs", "objectives"}
     assert body["summary"]["total_assigned"] == 5
     assert body["summary"]["total_primary"] == 5
     assert len(body["forward_lines"]) == 1

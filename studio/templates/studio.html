@@ -13,13 +13,8 @@
       </div>
     </div>
     <div class="actions">
-      <label class="switch" id="auto-solve-label">
-        <input type="checkbox" id="auto-solve-toggle" checked>
-        <span>Auto-solve</span>
-      </label>
-      <button id="solve-now-btn" type="button">Solve now</button>
-      <button id="reset-btn" type="button" title="Discard all in-memory edits">Reset</button>
       <a class="scenarios-link" href="{{ url_for('scenarios_view', roster_id=roster['id']) }}">Scenarios</a>
+      <button id="reset-btn" type="button" title="Discard all in-memory edits">Reset</button>
       <div class="split-btn" id="save-group">
         <button id="save-btn" type="button">Save roster</button>
         <button id="save-menu-toggle" type="button" class="split-btn-toggle" aria-expanded="false" aria-controls="save-menu" aria-label="More save options">
@@ -27,6 +22,7 @@
         </button>
         <div class="save-menu" id="save-menu" role="menu">
           <button type="button" class="save-menu-item" id="save-alt-btn" role="menuitem">Save roster as&hellip;</button>
+          <button type="button" class="save-menu-item" id="save-as-btn" role="menuitem" hidden>Save as&hellip;</button>
         </div>
       </div>
     </div>
@@ -35,6 +31,7 @@
   <dialog id="scenario-dialog">
     <form id="scenario-form">
       <h2 id="scenario-dialog-title">Save as scenario</h2>
+      <p id="scenario-dialog-subtitle" class="dialog-subtitle"></p>
       <label class="dialog-field">
         Title
         <input type="text" id="scenario-title" required>
@@ -65,18 +62,17 @@
   <div class="studio-layout">
     <section class="roster-panel">
       <div class="panel-header">
-        <h2 id="roster-panel-heading">Roster</h2>
+        <div class="panel-heading-group" id="panel-heading-group">
+          <h2 id="roster-panel-heading">Roster</h2>
+          <button type="button" id="scenario-heading-caret" class="heading-caret-btn" aria-haspopup="true" aria-expanded="false" aria-label="Scenario options" hidden>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <div class="heading-menu" id="scenario-heading-menu" role="menu"></div>
+        </div>
         <div class="add-buttons">
           <button id="add-player-btn" type="button">+ Add player</button>
           <button id="add-alt-btn" type="button">+ Add alt</button>
         </div>
-      </div>
-      <div class="solve-settings" id="solve-settings">
-        <label>Forwards <input id="setting-forwards" type="number" min="0" value="3"></label>
-        <label>Defense <input id="setting-defense" type="number" min="0" value="3"></label>
-        <label>Time limit (s) <input id="setting-time-limit" type="number" min="1" value="5"></label>
-        <label title="If off, a position a player neither prefers nor lists as secondary can't be used to fill a slot at all - takes precedence over Override.">Allow OOP <input id="setting-allow-oop" type="checkbox" checked></label>
-        <label title="If on, Override may force a player onto a position they marked unwilling. Off by default - unwilling is a stronger signal than an untagged position, so this needs explicit opt-in.">Allow Unwilling <input id="setting-allow-unwilling" type="checkbox"></label>
       </div>
       <table class="roster-table">
         <thead>
@@ -97,17 +93,45 @@
       </table>
     </section>
 
-    <section class="results-panel" id="results-panel">
-      <h2>Lines <span id="solve-pending-indicator" class="pending-indicator" hidden aria-label="Updating"></span></h2>
-      <div id="grid"></div>
-      <h2>Summary</h2>
-      <div id="summary"></div>
-      <div id="dof-panel" class="dof-panel" hidden>
-        <h2>DOF Analysis <span id="dof-pending-indicator" class="pending-indicator" hidden aria-label="Updating"></span></h2>
-        <div class="dof-score-row"><span class="stat-label">Net flexibility</span><span class="stat-val" id="dof-score-val">&mdash;</span></div>
-        <div class="summary-stats dof-breakdown" id="dof-breakdown-body"></div>
-      </div>
-    </section>
+    <div class="results-column">
+      <section class="settings-panel" id="settings-panel">
+        <div class="panel-header">
+          <h2>Solver</h2>
+          <div class="solver-actions">
+            <label class="switch" id="auto-solve-label">
+              <input type="checkbox" id="auto-solve-toggle" checked>
+              <span>Auto-solve</span>
+            </label>
+            <button id="solve-now-btn" type="button">Solve</button>
+          </div>
+        </div>
+        <div class="solve-settings" id="solve-settings">
+          <label>Forwards <input id="setting-forwards" type="number" min="0" value="3"></label>
+          <label>Defense <input id="setting-defense" type="number" min="0" value="3"></label>
+          <label>Time limit (s) <input id="setting-time-limit" type="number" min="1" value="5"></label>
+          <label title="If off, a position a player neither prefers nor lists as secondary can't be used to fill a slot at all - takes precedence over Override.">Allow OOP <input id="setting-allow-oop" type="checkbox" checked></label>
+          <label title="If on, Override may force a player onto a position they marked unwilling. Off by default - unwilling is a stronger signal than an untagged position, so this needs explicit opt-in.">Allow Unwilling <input id="setting-allow-unwilling" type="checkbox"></label>
+          <details class="objectives-details" id="objectives-details">
+            <summary>Objectives</summary>
+            <p class="objectives-hint">Highest priority first. Turn one off to drop it from the solve entirely; at least one must stay on.</p>
+            <ol class="objectives-list" id="objectives-list"></ol>
+          </details>
+        </div>
+      </section>
+
+      <section class="results-panel" id="results-panel">
+        <h2>Lines <span id="solve-pending-indicator" class="pending-indicator" hidden aria-label="Updating"></span></h2>
+        <div id="objectives-used" class="objectives-used"></div>
+        <div id="grid"></div>
+        <h2>Summary</h2>
+        <div id="summary"></div>
+        <div id="dof-panel" class="dof-panel" hidden>
+          <h2>DOF Analysis <span id="dof-pending-indicator" class="pending-indicator" hidden aria-label="Updating"></span></h2>
+          <div class="dof-score-row"><span class="stat-label">Net flexibility</span><span class="stat-val" id="dof-score-val">&mdash;</span></div>
+          <div class="summary-stats dof-breakdown" id="dof-breakdown-body"></div>
+        </div>
+      </section>
+    </div>
   </div>
 </div>
 
@@ -115,7 +139,7 @@
   window.INITIAL_ROSTER = {{ players | tojson }};
   window.POSITIONS = {{ positions | tojson }};
   window.ROSTER_ID = {{ roster['id'] }};
-  window.EXISTING_SCENARIO_TITLES = {{ scenario_titles | tojson }};
+  window.SCENARIO_LIST = {{ scenario_list | tojson }};
   window.LOADED_SCENARIO = {{ loaded_scenario | tojson }};
 </script>
 <script src="{{ url_for('static', filename='studio.js') }}"></script>

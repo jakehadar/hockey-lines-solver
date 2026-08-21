@@ -49,8 +49,10 @@ except Exception as e:
     sys.exit(1)
 
 from schemas import (
+    DEFAULT_OBJECTIVES,
     DefensePair,
     ForwardLine,
+    ObjectiveSetting,
     PlayerIn,
     SlotAssignment,
     SolveResponse,
@@ -144,7 +146,9 @@ def solve_lines(
     time_limit: int,
     allow_oop: bool = True,
     allow_unwilling: bool = False,
+    objectives: Optional[List[ObjectiveSetting]] = None,
 ) -> SolveResponse:
+    objectives = list(objectives) if objectives else list(DEFAULT_OBJECTIVES)
     available_count = sum(1 for p in players if p.available == 1)
 
     # Prioritize full forward lines: use as many full forward lines (3 players) as possible
@@ -317,22 +321,40 @@ def solve_lines(
             model.Add(dev >= total_exp_forwards - F * v)
             dev_vars.append(dev)
 
-    # Objective weights (large numbers to emulate lexicographic priorities)
-    # Objective weights: ensure lexicographic-like priorities W1 >> W2 >> W3
-    W1 = 1_000_000  # maximize number of assigned players
-    W2 = 10_000     # maximize position preferences (prioritized over balance)
-    W3 = 100        # minimize experience imbalance (smaller priority)
+    # Objective weights: this is a single weighted-sum objective standing in
+    # for true lexicographic priority, not three independent goals - it only
+    # works because each lower-priority term's weight is small enough that
+    # its entire value range can never outweigh a one-unit change in a
+    # higher-priority term. Reordering priorities (via `objectives`) can't
+    # just relabel three fixed numbers, or a swapped-in term could leak
+    # through and distort one ranked above it. Instead, magnitudes are
+    # derived bottom-up from each term's actual bound for this roster/slot
+    # count: the lowest-priority active term gets weight 1, and each term
+    # above it gets a weight large enough to dominate everything below it
+    # combined (weight = product of (bound + 1) for every lower term).
+    term_exprs = {
+        "assigned": sum(assigned),                                  # maximize number of assigned players
+        "preference": sum(pref_terms),                              # maximize position preferences
+        "balance": -sum(dev_vars) if dev_vars else None,            # minimize experience imbalance
+    }
+    term_bounds = {
+        "assigned": len(slots),
+        "preference": 2 * len(slots),
+        "balance": sum(v.Proto().domain[1] for v in dev_vars) if dev_vars else 0,
+    }
 
-    objective_terms = []
-    # assigned players (sum of assigned list)
-    objective_terms.append(W1 * sum(assigned))
-    # preference satisfaction
-    objective_terms.append(W2 * sum(pref_terms))
-    # penalty for imbalance
-    if dev_vars:
-        objective_terms.append(-W3 * sum(dev_vars))
+    active = [o for o in objectives if o.enabled and term_exprs[o.key] is not None]
+    weights: Dict[str, int] = {}
+    magnitude = 1
+    for o in reversed(active):
+        weights[o.key] = magnitude
+        magnitude *= term_bounds[o.key] + 1
 
-    model.Maximize(sum(objective_terms))
+    objectives_used = [ObjectiveSetting(key=o.key, enabled=o.key in weights) for o in objectives]
+
+    objective_terms = [weights[o.key] * term_exprs[o.key] for o in active]
+    if objective_terms:
+        model.Maximize(sum(objective_terms))
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit
@@ -346,6 +368,7 @@ def solve_lines(
             summary=SolveSummary(**summary_base, total_assigned=0, total_primary=0, total_secondary=0, total_oop=0, total_unwilling=0),
             forward_lines=[],
             defense_pairs=[],
+            objectives=objectives_used,
         )
 
     status_name = "OPTIMAL" if result == cp_model.OPTIMAL else "FEASIBLE"
@@ -428,6 +451,7 @@ def solve_lines(
         ),
         forward_lines=forward_lines,
         defense_pairs=defense_pairs,
+        objectives=objectives_used,
     )
 
 

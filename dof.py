@@ -45,7 +45,7 @@ from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Tuple
 
 import solver
-from schemas import SolveResponse
+from schemas import DEFAULT_OBJECTIVES, ObjectiveSetting, SolveResponse
 
 # Phase 1 cancellation: an in-process registry mapping a client-supplied job
 # id to the Event that stops it. Deliberately simple (no external store) -
@@ -94,6 +94,7 @@ class DegreesOfFreedomResult:
     total_extra_options: int
     total_filled_slots: int
     score_per_slot: float
+    objectives: List[ObjectiveSetting]
 
 
 # Same canonical order used throughout the app (forward line slots LW/C/RW,
@@ -102,15 +103,44 @@ class DegreesOfFreedomResult:
 _POSITION_ORDER = ("LW", "C", "RW", "LD", "RD")
 
 
-def _objective_key(resp: SolveResponse) -> Tuple[int, int]:
-    # A stand-in for solve_lines()'s real weighted objective (W1=1_000_000,
-    # W2=10_000, W3=100): this omits the W3 experience-balance term
-    # entirely, on purpose - it's the lowest-priority tiebreaker, three
-    # orders of magnitude below W2, so treating two solves as "equally good"
-    # even if experience balance differs slightly is the right call for a
-    # flexibility metric, not an approximation error.
-    s = resp.summary
-    return (s.total_assigned, 2 * s.total_primary + s.total_secondary)
+def _balance_metric(resp: SolveResponse) -> int:
+    """Reconstructs solve_lines()'s sum(dev_vars) from the response alone -
+    exact, not an approximation, because at optimum each dev var equals
+    |F * line_exp - total_exp| (the >= constraints pin it there under
+    maximization with a negative weight)."""
+    lines = resp.forward_lines
+    F = len(lines)
+    if F == 0:
+        return 0
+    total = sum(fl.exp_sum for fl in lines)
+    return sum(abs(F * fl.exp_sum - total) for fl in lines)
+
+
+_METRIC_FNS = {
+    "assigned": lambda resp: resp.summary.total_assigned,
+    "preference": lambda resp: 2 * resp.summary.total_primary + resp.summary.total_secondary,
+    "balance": lambda resp: -_balance_metric(resp),
+}
+
+
+def _active_objective_keys(objectives: List[ObjectiveSetting]) -> List[str]:
+    """Enabled objectives, highest priority first - order mirrors what
+    solve_lines() actually weighted (see solver.py's rank-derived
+    magnitudes)."""
+    return [o.key for o in objectives if o.enabled]
+
+
+def _objective_key(resp: SolveResponse, active_keys: List[str]) -> Tuple[int, ...]:
+    # Mirrors solve_lines()'s real weighted objective under whatever
+    # priority order was actually active - but deliberately omits the
+    # *lowest*-priority active term, on purpose. That term is this solve's
+    # tiebreaker, orders of magnitude below the ones above it, so treating
+    # two solves as "equally good" even if it differs slightly is the right
+    # call for a flexibility metric, not an approximation error. With only
+    # one active objective there's nothing above it to prioritize over, so
+    # nothing is dropped.
+    compare_keys = active_keys[:-1] if len(active_keys) > 1 else active_keys
+    return tuple(_METRIC_FNS[k](resp) for k in compare_keys)
 
 
 def _filled_positions(resp: SolveResponse) -> Dict[str, List[str]]:
@@ -132,9 +162,11 @@ def _check_candidate(
     num_forwards_requested: int,
     num_defense_requested: int,
     time_limit: int,
-    baseline_key: Tuple[int, int],
+    baseline_key: Tuple[int, ...],
+    active_keys: List[str],
     allow_oop: bool = True,
     allow_unwilling: bool = False,
+    objectives: Optional[List[ObjectiveSetting]] = None,
     cancel_event: Optional[threading.Event] = None,
 ) -> bool:
     # ThreadPoolExecutor.submit() doesn't block, so by the time a cancel
@@ -155,11 +187,11 @@ def _check_candidate(
     # correctly excluding them as a substitution option with no special-casing.
     resp = solver.solve_lines(
         trial_players, num_forwards_requested, num_defense_requested, time_limit,
-        allow_oop=allow_oop, allow_unwilling=allow_unwilling,
+        allow_oop=allow_oop, allow_unwilling=allow_unwilling, objectives=objectives,
     )
     if resp.status == "NO_SOLUTION":
         return False
-    return _objective_key(resp) == baseline_key
+    return _objective_key(resp, active_keys) == baseline_key
 
 
 def compute_degrees_of_freedom(
@@ -169,22 +201,25 @@ def compute_degrees_of_freedom(
     time_limit: int = 5,
     allow_oop: bool = True,
     allow_unwilling: bool = False,
+    objectives: Optional[List[ObjectiveSetting]] = None,
     max_workers: int = 8,
     cancel_event: Optional[threading.Event] = None,
 ) -> DegreesOfFreedomResult | None:
     if cancel_event is not None and cancel_event.is_set():
         return None
 
+    objectives = list(objectives) if objectives else list(DEFAULT_OBJECTIVES)
     baseline = solver.solve_lines(
         players, num_forwards_requested, num_defense_requested, time_limit,
-        allow_oop=allow_oop, allow_unwilling=allow_unwilling,
+        allow_oop=allow_oop, allow_unwilling=allow_unwilling, objectives=objectives,
     )
     if baseline.status == "NO_SOLUTION":
         return None
     if cancel_event is not None and cancel_event.is_set():
         return None
 
-    baseline_key = _objective_key(baseline)
+    active_keys = _active_objective_keys(baseline.objectives)
+    baseline_key = _objective_key(baseline, active_keys)
     holders_by_position = _filled_positions(baseline)
 
     # Work items: (position, candidate_id) pairs worth actually re-solving for.
@@ -220,8 +255,8 @@ def compute_degrees_of_freedom(
             futures[
                 pool.submit(
                     _check_candidate, players, candidate_id, position,
-                    num_forwards_requested, num_defense_requested, time_limit, baseline_key,
-                    allow_oop=allow_oop, allow_unwilling=allow_unwilling, cancel_event=cancel_event,
+                    num_forwards_requested, num_defense_requested, time_limit, baseline_key, active_keys,
+                    allow_oop=allow_oop, allow_unwilling=allow_unwilling, objectives=objectives, cancel_event=cancel_event,
                 )
             ] = (position, candidate_id)
         for future in as_completed(futures):
@@ -250,6 +285,7 @@ def compute_degrees_of_freedom(
         total_extra_options=total_extra,
         total_filled_slots=total_slots,
         score_per_slot=(total_extra / total_slots) if total_slots else 0.0,
+        objectives=baseline.objectives,
     )
 
 

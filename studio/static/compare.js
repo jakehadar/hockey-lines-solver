@@ -4,6 +4,19 @@
   const scenarios = window.SCENARIOS || [];
   const grid = document.getElementById("compare-grid");
 
+  // Mirrors studio.js's OBJECTIVE_SHORT_LABELS - kept in sync by hand since
+  // this is a separate, server-rendered page with its own small script.
+  const OBJECTIVE_SHORT_LABELS = { assigned: "Assigned", preference: "Preference", balance: "Balance" };
+
+  function formatObjectives(objectives) {
+    if (!objectives || !objectives.length) return "";
+    const active = objectives.filter((o) => o.enabled).map((o) => OBJECTIVE_SHORT_LABELS[o.key]);
+    const off = objectives.filter((o) => !o.enabled).map((o) => OBJECTIVE_SHORT_LABELS[o.key]);
+    let text = "Priority: " + active.join(" > ");
+    if (off.length) text += "  ·  off: " + off.join(", ");
+    return text;
+  }
+
   function escapeHtml(str) {
     const div = document.createElement("div");
     div.textContent = str || "";
@@ -97,9 +110,10 @@
         '<div class="compare-column-header">' +
         '<h2>' + escapeHtml(sc.title) + '</h2>' +
         (sc.description ? '<p class="compare-description">' + escapeHtml(sc.description) + '</p>' : '') +
-        '<p class="compare-settings">Forwards ' + sc.forwards + ' &middot; Defense ' + sc.defense +
-        ' &middot; Allow OOP ' + (sc.allow_oop === false ? 'No' : 'Yes') +
+        '<p class="compare-settings">Forwards ' + sc.forwards + ' &middot; Defense ' + sc.defense + '<br>' +
+        'Allow OOP ' + (sc.allow_oop === false ? 'No' : 'Yes') +
         ' &middot; Allow Unwilling ' + (sc.allow_unwilling === true ? 'Yes' : 'No') + '</p>' +
+        '<p class="compare-objectives">' + escapeHtml(formatObjectives(sc.objectives)) + '</p>' +
         '<a class="compare-load-link" href="' + sc.load_url + '">Load into editor&hellip;</a>' +
         '</div>' +
         renderResult(sc.result) +
