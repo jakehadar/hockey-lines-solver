@@ -283,10 +283,6 @@ def studio_view(roster_id: int):
             "result": json.loads(scenario["result_json"]),
         }
 
-    # Loading a scenario only makes sense in Scenario mode; otherwise restore
-    # whichever mode this roster was last left in.
-    initial_mode = "scenario" if loaded_scenario else roster["last_mode"]
-
     return render_template(
         "studio.html",
         roster=roster,
@@ -294,21 +290,7 @@ def studio_view(roster_id: int):
         positions=POSITIONS,
         scenario_titles=scenario_titles,
         loaded_scenario=loaded_scenario,
-        initial_mode=initial_mode,
     )
-
-
-@app.post("/w/<token>/studio/<int:roster_id>/mode")
-def studio_set_mode(roster_id: int):
-    workspace = _require_workspace()
-    if db.get_roster(roster_id, workspace["id"]) is None:
-        abort(404)
-    body = request.get_json(silent=True) or {}
-    mode = body.get("mode")
-    if mode not in ("roster", "scenario"):
-        abort(400, description="mode must be 'roster' or 'scenario'.")
-    db.set_roster_mode(roster_id, mode)
-    return jsonify({"ok": True})
 
 
 @app.post("/w/<token>/studio/<int:roster_id>/solve")

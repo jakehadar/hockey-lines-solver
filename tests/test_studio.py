@@ -587,9 +587,6 @@ def test_loading_a_scenario_seeds_players_but_leaves_the_roster_untouched(client
     # Loading a scenario for viewing never modifies the roster itself.
     assert len(db_module.list_players(roster_id)) == 3
 
-    # Loading a scenario always lands in Scenario mode, regardless of last_mode.
-    assert 'data-initial-mode="scenario"' in body
-
 
 def test_loading_an_unknown_scenario_404s(client, studio):
     token, roster_id = _create_roster(client)
@@ -617,41 +614,6 @@ def test_compare_view_has_a_load_link_for_every_scenario(client, studio):
     assert f"load_scenario={other_id}" in body
 
 
-def test_new_roster_starts_in_roster_mode(client, studio):
-    token, roster_id = _create_roster(client)
-    resp = client.get(f"/w/{token}/studio/{roster_id}")
-    assert 'data-initial-mode="roster"' in resp.get_data(as_text=True)
-
-
-def test_switching_mode_persists_across_page_loads(client, studio):
-    _, db_module = studio
-    token, roster_id = _create_roster(client)
-
-    resp = client.post(f"/w/{token}/studio/{roster_id}/mode", json={"mode": "scenario"})
-    assert resp.status_code == 200
-
-    workspace = db_module.get_workspace_by_token(token)
-    assert db_module.get_roster(roster_id, workspace["id"])["last_mode"] == "scenario"
-
-    resp = client.get(f"/w/{token}/studio/{roster_id}")
-    assert 'data-initial-mode="scenario"' in resp.get_data(as_text=True)
-
-    # Switching back persists too - it isn't a one-way ratchet.
-    client.post(f"/w/{token}/studio/{roster_id}/mode", json={"mode": "roster"})
-    resp = client.get(f"/w/{token}/studio/{roster_id}")
-    assert 'data-initial-mode="roster"' in resp.get_data(as_text=True)
-
-
-def test_set_mode_rejects_an_invalid_mode(client, studio):
-    token, roster_id = _create_roster(client)
-    resp = client.post(f"/w/{token}/studio/{roster_id}/mode", json={"mode": "nonsense"})
-    assert resp.status_code == 400
-
-
-def test_loading_a_scenario_overrides_a_roster_mode_last_mode(client, studio):
-    token, roster_id = _create_roster(client)
-    client.post(f"/w/{token}/studio/{roster_id}/mode", json={"mode": "roster"})
-    scenario_id = _create_scenario(client, token, roster_id, title="Named").get_json()["scenario_id"]
-
-    resp = client.get(f"/w/{token}/studio/{roster_id}?load_scenario={scenario_id}")
-    assert 'data-initial-mode="scenario"' in resp.get_data(as_text=True)
+# Editor mode (Roster vs Scenario) and auto-solve are per-browser preferences
+# kept in localStorage now, not server state - see studio.js. They're covered
+# by live browser checks, not here.

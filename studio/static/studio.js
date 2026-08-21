@@ -8,6 +8,48 @@
   const root = document.getElementById("studio-root");
   const serverLoadedScenario = window.LOADED_SCENARIO || null;
 
+  // Editor mode and auto-solve are per-browser preferences, not roster data -
+  // localStorage, not the server, so they never clash across different
+  // browsers sharing the same workspace link. Wrapped in try/catch since
+  // storage access can throw (private browsing, blocked site data, etc.).
+  const MODE_STORAGE_KEY = "studio.lastMode." + ROSTER_ID;
+  const AUTO_SOLVE_STORAGE_KEY = "studio.autoSolve";
+
+  function loadStoredMode() {
+    try {
+      const stored = localStorage.getItem(MODE_STORAGE_KEY);
+      return stored === "roster" || stored === "scenario" ? stored : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function storeMode(newMode) {
+    try {
+      localStorage.setItem(MODE_STORAGE_KEY, newMode);
+    } catch (e) {
+      // Best-effort - losing the remembered mode just means next visit
+      // falls back to the default, which is a fine outcome.
+    }
+  }
+
+  function loadStoredAutoSolve() {
+    try {
+      const stored = localStorage.getItem(AUTO_SOLVE_STORAGE_KEY);
+      return stored === null ? true : stored === "1";
+    } catch (e) {
+      return true;
+    }
+  }
+
+  function storeAutoSolve(enabled) {
+    try {
+      localStorage.setItem(AUTO_SOLVE_STORAGE_KEY, enabled ? "1" : "0");
+    } catch (e) {
+      // Best-effort, same as storeMode.
+    }
+  }
+
   // rosterBaseline is the roster's own saved players - the only baseline
   // Roster mode ever compares against, and what Reset always falls back to.
   let rosterBaseline = JSON.parse(JSON.stringify(window.INITIAL_ROSTER));
@@ -29,7 +71,11 @@
     ? { forwards: serverLoadedScenario.forwards, defense: serverLoadedScenario.defense, time_limit: serverLoadedScenario.time_limit, result: serverLoadedScenario.result }
     : null;
 
-  let mode = window.INITIAL_MODE === "scenario" ? "scenario" : "roster";
+  // Loading a scenario only ever makes sense in Scenario mode, full stop -
+  // otherwise fall back to whatever this browser last had this roster in,
+  // or Roster mode if nothing's stored (a plain roster link's natural
+  // starting point, since there's nothing to solve yet on a brand-new one).
+  let mode = serverLoadedScenario ? "scenario" : loadStoredMode() || "roster";
   let players = JSON.parse(JSON.stringify(mode === "roster" ? rosterBaseline : scenarioOrigin));
   let lastResult = serverLoadedScenario ? serverLoadedScenario.result : null;
   let debounceTimer = null;
@@ -385,7 +431,10 @@
   resetBtn.addEventListener("click", doReset);
   document.getElementById("solve-now-btn").addEventListener("click", doSolve);
 
+  autoToggle.checked = loadStoredAutoSolve();
+
   autoToggle.addEventListener("change", () => {
+    storeAutoSolve(autoToggle.checked);
     if (autoToggle.checked) scheduleSolve();
   });
 
@@ -556,16 +605,6 @@
 
   // --- Mode switching ----------------------------------------------------
 
-  function persistMode(newMode) {
-    // Fire-and-forget: a failed persist just means the next visit falls back
-    // to whichever mode was last saved successfully - not worth blocking on.
-    fetch(STUDIO_BASE + "/mode", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: newMode }),
-    });
-  }
-
   function applyModeUI() {
     root.classList.toggle("mode-roster", mode === "roster");
     root.classList.toggle("mode-scenario", mode === "scenario");
@@ -596,7 +635,7 @@
       render();
       doSolve();
     }
-    persistMode(mode);
+    storeMode(mode);
   }
 
   function requestModeSwitch(target) {

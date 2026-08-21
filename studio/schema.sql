@@ -14,11 +14,7 @@ CREATE TABLE IF NOT EXISTS rosters (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    -- Which editor mode this roster was last left in ('roster' or
-    -- 'scenario'), so reopening it restores where the user left off.
-    -- New rosters always start in 'roster' mode.
-    last_mode TEXT NOT NULL DEFAULT 'roster' CHECK (last_mode IN ('roster', 'scenario'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_rosters_workspace_id ON rosters(workspace_id);

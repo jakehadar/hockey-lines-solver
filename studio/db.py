@@ -95,14 +95,9 @@ def list_rosters(workspace_id: int, db_path: Path | None = None) -> List[sqlite3
 def get_roster(roster_id: int, workspace_id: int, db_path: Path | None = None) -> sqlite3.Row | None:
     with get_connection(db_path) as conn:
         return conn.execute(
-            "SELECT id, title, created_at, last_mode FROM rosters WHERE id = ? AND workspace_id = ?",
+            "SELECT id, title, created_at FROM rosters WHERE id = ? AND workspace_id = ?",
             (roster_id, workspace_id),
         ).fetchone()
-
-
-def set_roster_mode(roster_id: int, mode: str, db_path: Path | None = None) -> None:
-    with get_connection(db_path) as conn:
-        conn.execute("UPDATE rosters SET last_mode = ? WHERE id = ?", (mode, roster_id))
 
 
 def delete_roster(roster_id: int, workspace_id: int, db_path: Path | None = None) -> None:
