@@ -115,6 +115,40 @@ def test_solve_endpoint_is_stateless(client):
     assert body["summary"]["total_primary"] == 3
 
 
+def test_degrees_of_freedom_endpoint_reports_zero_flexibility_for_an_exactly_sized_roster(client):
+    # 3 players, 1 forward line (3 slots) - every player is already needed
+    # just to fill the line, so there's no room for any substitution.
+    token, roster_id = _create_roster(client)
+    resp = client.post(
+        f"/w/{token}/studio/{roster_id}/degrees-of-freedom",
+        json={"players": SMALL_PLAYERS, "forwards": 1, "defense": 0, "time_limit": 5},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] in ("OPTIMAL", "FEASIBLE")
+    assert body["total_filled_slots"] == 3
+    assert body["total_extra_options"] == 0
+    assert body["score_per_slot"] == 0
+    assert {pf["position"] for pf in body["by_position"]} == {"LW", "C", "RW"}
+    assert all(pf["extra_options"] == 0 for pf in body["by_position"])
+
+
+def test_degrees_of_freedom_endpoint_reports_no_solution_when_baseline_is_infeasible(client):
+    # Two players both locked to the same position, with only one slot for
+    # it - the baseline solve itself is infeasible, so there's nothing to score.
+    token, roster_id = _create_roster(client)
+    players = [
+        {"id": "P1", "name": "A", "available": 1, "experience": 3, "preferred_positions": ["LW"], "secondary_positions": [], "optional_position_override": "LW"},
+        {"id": "P2", "name": "B", "available": 1, "experience": 3, "preferred_positions": ["LW"], "secondary_positions": [], "optional_position_override": "LW"},
+    ]
+    resp = client.post(
+        f"/w/{token}/studio/{roster_id}/degrees-of-freedom",
+        json={"players": players, "forwards": 1, "defense": 0, "time_limit": 5},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json() == {"status": "NO_SOLUTION"}
+
+
 def test_save_persists_unwilling_positions_but_not_ephemeral_fields(client, studio):
     # available, optional_position_override, and optional_player_link are all
     # ephemeral - none of them round-trip through the roster.
@@ -428,7 +462,21 @@ def test_csv_upload_without_a_file_shows_an_error(client, studio):
     assert "upload_error" in resp.headers["Location"]
 
 
-def _create_scenario(client, token, roster_id, title="Scenario 1", description="", players=None, result=None):
+def _fake_dof():
+    return {
+        "status": "OPTIMAL",
+        "total_extra_options": 3,
+        "total_filled_slots": 3,
+        "score_per_slot": 1.0,
+        "by_position": [
+            {"position": "LW", "slots_filled": 1, "extra_options": 1, "candidates_checked": 2},
+            {"position": "C", "slots_filled": 1, "extra_options": 1, "candidates_checked": 2},
+            {"position": "RW", "slots_filled": 1, "extra_options": 1, "candidates_checked": 2},
+        ],
+    }
+
+
+def _create_scenario(client, token, roster_id, title="Scenario 1", description="", players=None, result=None, dof=None):
     return client.post(
         f"/w/{token}/studio/{roster_id}/scenarios",
         json={
@@ -439,6 +487,7 @@ def _create_scenario(client, token, roster_id, title="Scenario 1", description="
             "defense": 1,
             "time_limit": 5,
             "result": result or _fake_result(),
+            "dof": dof,
         },
     )
 
@@ -467,6 +516,51 @@ def test_create_scenario_defaults_to_no_parent(client, studio):
 
     # The roster's own players are untouched by saving a scenario.
     assert len(db_module.list_players(roster_id)) == 3
+
+
+def test_scenario_dof_analysis_round_trips_through_create_view_and_compare(client, studio):
+    _, db_module = studio
+    token, roster_id = _create_roster(client)
+
+    resp = _create_scenario(client, token, roster_id, title="Bench Bob", dof=_fake_dof())
+    scenario_id = resp.get_json()["scenario_id"]
+
+    scenario = db_module.get_scenario(scenario_id, roster_id)
+    assert json.loads(scenario["dof_json"]) == _fake_dof()
+
+    # Scenarios list: shown as a subtitle under the scenario's title.
+    list_body = client.get(f"/w/{token}/studio/{roster_id}/scenarios").get_data(as_text=True)
+    assert "Net flexibility: 1.00 / slot" in list_body
+
+    # Compare view: passed through to the client as part of window.SCENARIOS.
+    compare_body = client.get(f"/w/{token}/studio/{roster_id}/compare?ids={scenario_id}").get_data(as_text=True)
+    compared = _extract_json_var(compare_body, "SCENARIOS")
+    assert compared[0]["dof"] == _fake_dof()
+
+    # Loading it back into the editor: passed through as window.LOADED_SCENARIO.dof.
+    studio_body = client.get(f"/w/{token}/studio/{roster_id}?load_scenario={scenario_id}").get_data(as_text=True)
+    loaded = _extract_json_var(studio_body, "LOADED_SCENARIO")
+    assert loaded["dof"] == _fake_dof()
+
+
+def test_scenario_without_a_dof_analysis_omits_it_everywhere(client, studio):
+    # A scenario saved before this feature existed, or before the client-side
+    # analysis finished computing, has no dof_json - every surface must
+    # tolerate that rather than erroring.
+    _, db_module = studio
+    token, roster_id = _create_roster(client)
+    scenario_id = _create_scenario(client, token, roster_id, title="No Dof").get_json()["scenario_id"]
+
+    assert db_module.get_scenario(scenario_id, roster_id)["dof_json"] is None
+
+    list_body = client.get(f"/w/{token}/studio/{roster_id}/scenarios").get_data(as_text=True)
+    assert "Net flexibility" not in list_body
+
+    compare_body = client.get(f"/w/{token}/studio/{roster_id}/compare?ids={scenario_id}").get_data(as_text=True)
+    assert _extract_json_var(compare_body, "SCENARIOS")[0]["dof"] is None
+
+    studio_body = client.get(f"/w/{token}/studio/{roster_id}?load_scenario={scenario_id}").get_data(as_text=True)
+    assert _extract_json_var(studio_body, "LOADED_SCENARIO")["dof"] is None
 
 
 def test_create_scenario_with_a_parent_branches_it(client, studio):

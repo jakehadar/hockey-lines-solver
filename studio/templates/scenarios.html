@@ -18,7 +18,12 @@
       {% for s in scenarios %}
       <tr>
         <td><input type="checkbox" name="ids" value="{{ s['id'] }}"></td>
-        <td>{{ s['title'] }}{% if s['parent_title'] %} <span class="branched-from">(branched from {{ s['parent_title'] }})</span>{% endif %}</td>
+        <td>
+          {{ s['title'] }}{% if s['parent_title'] %} <span class="branched-from">(branched from {{ s['parent_title'] }})</span>{% endif %}
+          {% if dof_by_scenario_id.get(s['id']) %}
+          <div class="scenario-dof-subtitle">Net flexibility: {{ "%.2f"|format(dof_by_scenario_id[s['id']]['score_per_slot']) }} / slot</div>
+          {% endif %}
+        </td>
         <td>{{ s['description'] }}</td>
         <td>{{ s['created_at'] }}</td>
         <td>

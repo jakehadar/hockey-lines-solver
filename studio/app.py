@@ -21,6 +21,7 @@ from typing import Any
 from flask import Flask, Response, abort, g, jsonify, redirect, render_template, request, url_for
 from pydantic import ValidationError
 
+import dof
 import solver
 from schemas import PlayerIn, ScenarioSave, ScenarioUpdate, SolveRequest
 from studio import db
@@ -327,6 +328,7 @@ def studio_view(roster_id: int):
             "defense": scenario["defense"],
             "time_limit": scenario["time_limit"],
             "result": json.loads(scenario["result_json"]),
+            "dof": json.loads(scenario["dof_json"]) if scenario["dof_json"] else None,
         }
 
     return render_template(
@@ -354,6 +356,46 @@ def studio_solve(roster_id: int):
     players = solver.players_from_player_in(req.players)
     result = solver.solve_lines(players, req.forwards, req.defense, req.time_limit)
     return jsonify(result.model_dump())
+
+
+@app.post("/w/<token>/studio/<int:roster_id>/degrees-of-freedom")
+def studio_degrees_of_freedom(roster_id: int):
+    """Prototype: how many other available players could substitute at each
+    position without dropping the solve below its current best objective -
+    see dof.py for the full explanation. Expensive relative to /solve (many
+    re-solves), so the client fires this only after a solve lands, and
+    cancels/ignores it if a newer one supersedes it before this returns."""
+    workspace = _require_workspace()
+    if db.get_roster(roster_id, workspace["id"]) is None:
+        abort(404)
+    body = request.get_json(silent=True) or {}
+    try:
+        req = SolveRequest.model_validate(body)
+    except ValidationError as e:
+        abort(400, description=str(e))
+    if not req.players:
+        abort(400, description="players must not be empty.")
+    players = solver.players_from_player_in(req.players)
+    result = dof.compute_degrees_of_freedom(players, req.forwards, req.defense, req.time_limit)
+    if result is None:
+        return jsonify({"status": "NO_SOLUTION"})
+    return jsonify(
+        {
+            "status": result.baseline.status,
+            "total_extra_options": result.total_extra_options,
+            "total_filled_slots": result.total_filled_slots,
+            "score_per_slot": result.score_per_slot,
+            "by_position": [
+                {
+                    "position": pf.position,
+                    "slots_filled": pf.slots_filled,
+                    "extra_options": pf.extra_options,
+                    "candidates_checked": pf.candidates_checked,
+                }
+                for pf in result.by_position
+            ],
+        }
+    )
 
 
 @app.post("/w/<token>/studio/<int:roster_id>/save")
@@ -409,6 +451,7 @@ def scenarios_create(roster_id: int):
         json.dumps([p.model_dump() for p in req.players]),
         req.result.model_dump_json(),
         parent_scenario_id=req.parent_scenario_id,
+        dof_json=req.dof.model_dump_json() if req.dof else None,
     )
     return jsonify({"scenario_id": scenario_id})
 
@@ -435,6 +478,7 @@ def scenarios_update(roster_id: int, scenario_id: int):
         req.time_limit,
         json.dumps([p.model_dump() for p in req.players]),
         req.result.model_dump_json(),
+        dof_json=req.dof.model_dump_json() if req.dof else None,
     )
     return jsonify({"scenario_id": scenario_id})
 
@@ -446,7 +490,8 @@ def scenarios_view(roster_id: int):
     if roster is None:
         abort(404)
     scenarios = db.list_scenarios(roster_id)
-    return render_template("scenarios.html", roster=roster, scenarios=scenarios)
+    dof_by_scenario_id = {s["id"]: json.loads(s["dof_json"]) for s in scenarios if s["dof_json"]}
+    return render_template("scenarios.html", roster=roster, scenarios=scenarios, dof_by_scenario_id=dof_by_scenario_id)
 
 
 @app.post("/w/<token>/studio/<int:roster_id>/scenarios/<int:scenario_id>/delete")
@@ -480,6 +525,7 @@ def scenarios_compare(roster_id: int):
             "time_limit": s["time_limit"],
             "load_url": url_for("studio_view", roster_id=roster_id, load_scenario=s["id"]),
             "result": json.loads(s["result_json"]),
+            "dof": json.loads(s["dof_json"]) if s["dof_json"] else None,
         }
         for s in scenarios
     ]

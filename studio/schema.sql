@@ -56,7 +56,12 @@ CREATE TABLE IF NOT EXISTS scenarios (
     -- algorithm instead of silently treating them as current.
     algo_version INTEGER NOT NULL DEFAULT 0,
     players_json TEXT NOT NULL,
-    result_json TEXT NOT NULL
+    result_json TEXT NOT NULL,
+    -- Cached degrees-of-freedom analysis (see dof.py), computed client-side
+    -- and sent along at save time rather than recomputed server-side - it's
+    -- many times more expensive than a single solve. Null for scenarios
+    -- saved before this existed, or saved before the analysis finished.
+    dof_json TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_scenarios_roster_id ON scenarios(roster_id);

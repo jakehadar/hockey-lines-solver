@@ -303,6 +303,23 @@ dialog#scenario-dialog h2, dialog#unsaved-dialog h2 { margin: 0 0 1rem; font-siz
 .results-panel.stale #grid, .results-panel.stale #summary { opacity: 0.45; pointer-events: none; }
 .pending-indicator { display: inline-flex; align-items: center; gap: 0.35rem; font-weight: 600; }
 .pending-indicator[hidden] { display: none; }
+
+/* dof runs (much) longer than the main solve above and keeps computing
+   after that one has already resolved and rendered, so it dims on its own
+   timeline (.dof-stale) rather than tracking .results-panel.stale - and it
+   dims the last-known numbers in place instead of clearing them. */
+.dof-panel { margin-top: 0.5rem; transition: opacity 0.15s ease; }
+.dof-panel[hidden] { display: none; }
+.dof-panel.dof-stale { opacity: 0.45; pointer-events: none; }
+.dof-panel h2 { margin-top: 1rem; }
+.dof-score-row { display: flex; justify-content: space-between; padding: 0.35rem 0.5rem; background: var(--bg); border-radius: 6px; margin-bottom: 0.5rem; }
+/* Column-major fill (LW/C/RW down column 1, LD/RD down column 2), matching
+   the forward-line/defense-pair cards these tiles describe - relies on
+   by_position already arriving in that same LW,C,RW,LD,RD order. */
+.dof-breakdown { grid-auto-flow: column; grid-template-rows: repeat(3, auto); }
+.summary-stats > div.stat-rigid { background: var(--danger-weak); }
+.summary-stats > div.stat-rigid .stat-label,
+.summary-stats > div.stat-rigid .stat-val { color: var(--danger); }
 .pending-indicator::before {
   content: "";
   width: 0.7em;
@@ -334,6 +351,7 @@ dialog#scenario-dialog h2, dialog#unsaved-dialog h2 { margin: 0 0 1rem; font-siz
 .badge { display: inline-block; font-size: 0.7rem; font-weight: 700; padding: 0.1rem 0.4rem; border-radius: 999px; background: var(--accent-weak); color: var(--accent); }
 .badge.alt { background: #fff2cc; color: #8a6d00; }
 .branched-from { color: var(--muted); font-weight: 400; }
+.scenario-dof-subtitle { font-size: 0.78rem; color: var(--muted); margin-top: 0.15rem; }
 
 /* Roster mode: no ephemeral fields, no solver */
 #studio-root.mode-roster .col-ephemeral,

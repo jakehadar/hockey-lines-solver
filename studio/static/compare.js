@@ -62,6 +62,34 @@
     return html;
   }
 
+  function renderDof(dof) {
+    // Cached at save time (see dof.py) - never recomputed here, since it's
+    // many times more expensive than a single solve and this is a read-only
+    // comparison view. Absent for scenarios saved before this existed, or
+    // saved before the analysis had finished computing client-side.
+    if (!dof || dof.status === "NO_SOLUTION") return "";
+    const tiles = dof.by_position
+      .map(function (pf) {
+        const cls = pf.extra_options === 0 ? "stat-rigid" : "";
+        return (
+          '<div class="' + cls + '">' +
+          '<span class="stat-label">' + pf.position + "</span>" +
+          '<span class="stat-val">' + pf.extra_options + "/" + pf.candidates_checked + "</span>" +
+          "</div>"
+        );
+      })
+      .join("");
+    return (
+      '<div class="dof-panel">' +
+      "<h2>DOF Analysis</h2>" +
+      '<div class="dof-score-row"><span class="stat-label">Net flexibility</span><span class="stat-val">' +
+      dof.score_per_slot.toFixed(2) +
+      " / slot</span></div>" +
+      '<div class="summary-stats dof-breakdown">' + tiles + "</div>" +
+      "</div>"
+    );
+  }
+
   grid.innerHTML = scenarios
     .map(function (sc) {
       return (
@@ -73,6 +101,7 @@
         '<a class="compare-load-link" href="' + sc.load_url + '">Load into editor&hellip;</a>' +
         '</div>' +
         renderResult(sc.result) +
+        renderDof(sc.dof) +
         '</div>'
       );
     })

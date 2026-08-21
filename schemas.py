@@ -101,12 +101,36 @@ class SolveResponse(BaseModel):
     defense_pairs: List[DefensePair] = Field(..., description="Defense pair assignments, in pair order.")
 
 
+class PositionFlexibility(BaseModel):
+    position: str = Field(..., description="Position code, e.g. 'LW'.")
+    slots_filled: int = Field(..., description="Slots at this position in the baseline solve.")
+    extra_options: int = Field(..., description="Other available players who could substitute here without dropping the objective.")
+    candidates_checked: int = Field(..., description="Other available players actually considered as candidates for this position.")
+
+
+class DofSummary(BaseModel):
+    """See dof.py - a degrees-of-freedom analysis, cached alongside a
+    scenario snapshot at save time rather than recomputed (it's many times
+    more expensive than a single solve)."""
+
+    status: Literal["OPTIMAL", "FEASIBLE", "NO_SOLUTION"] = Field(
+        ..., description="The baseline solve status this analysis was computed against."
+    )
+    total_extra_options: int = Field(..., description="Sum of extra substitution options across all filled positions.")
+    total_filled_slots: int = Field(..., description="Total slots filled in the baseline solve.")
+    score_per_slot: float = Field(..., description="total_extra_options / total_filled_slots.")
+    by_position: List[PositionFlexibility] = Field(..., description="Per-position breakdown, in LW/C/RW/LD/RD order.")
+
+
 class ScenarioUpdate(SolveRequest):
     """Overwriting an already-loaded scenario in place: same shape as a
     fresh scenario save, minus title/description/parent, which don't
     change when you're just updating the snapshot itself."""
 
     result: SolveResponse = Field(..., description="The solve result this exact snapshot produced.")
+    dof: Optional[DofSummary] = Field(
+        None, description="Cached degrees-of-freedom analysis, if one had finished computing client-side before this save."
+    )
 
 
 class ScenarioSave(ScenarioUpdate):

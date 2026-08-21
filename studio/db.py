@@ -60,6 +60,19 @@ def get_connection(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
 def init_db(db_path: Path | None = None) -> None:
     with get_connection(db_path) as conn:
         conn.executescript(SCHEMA_PATH.read_text())
+        _migrate(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """CREATE TABLE IF NOT EXISTS in schema.sql only helps brand-new
+    databases - it can't add a column to a scenarios table that already
+    exists from before that column was introduced. There's no migration
+    framework here (nothing needed one before), so this just adds any
+    columns schema.sql has gained since the table was first created,
+    idempotently, without touching existing rows."""
+    existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(scenarios)")}
+    if "dof_json" not in existing_columns:
+        conn.execute("ALTER TABLE scenarios ADD COLUMN dof_json TEXT")
 
 
 def create_workspace(token: str, client_ip: str | None = None, db_path: Path | None = None) -> int:
@@ -197,13 +210,14 @@ def create_scenario(
     players_json: str,
     result_json: str,
     parent_scenario_id: int | None = None,
+    dof_json: str | None = None,
     db_path: Path | None = None,
 ) -> int:
     with get_connection(db_path) as conn:
         cur = conn.execute(
             "INSERT INTO scenarios (roster_id, parent_scenario_id, title, description, forwards, defense, "
-            "time_limit, players_json, result_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (roster_id, parent_scenario_id, title, description, forwards, defense, time_limit, players_json, result_json),
+            "time_limit, players_json, result_json, dof_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (roster_id, parent_scenario_id, title, description, forwards, defense, time_limit, players_json, result_json, dof_json),
         )
         return cur.lastrowid
 
@@ -215,14 +229,15 @@ def replace_scenario(
     time_limit: int,
     players_json: str,
     result_json: str,
+    dof_json: str | None = None,
     db_path: Path | None = None,
 ) -> None:
     """Overwrite an already-loaded scenario in place (Save scenario, not Branch)."""
     with get_connection(db_path) as conn:
         conn.execute(
             "UPDATE scenarios SET forwards = ?, defense = ?, time_limit = ?, players_json = ?, "
-            "result_json = ?, created_at = datetime('now') WHERE id = ?",
-            (forwards, defense, time_limit, players_json, result_json, scenario_id),
+            "result_json = ?, dof_json = ?, created_at = datetime('now') WHERE id = ?",
+            (forwards, defense, time_limit, players_json, result_json, dof_json, scenario_id),
         )
 
 
@@ -230,7 +245,7 @@ def list_scenarios(roster_id: int, db_path: Path | None = None) -> List[sqlite3.
     with get_connection(db_path) as conn:
         return conn.execute(
             "SELECT s.id, s.title, s.description, s.created_at, s.parent_scenario_id, s.forwards, "
-            "s.defense, s.time_limit, s.algo_version, p.title AS parent_title "
+            "s.defense, s.time_limit, s.algo_version, s.dof_json, p.title AS parent_title "
             "FROM scenarios s LEFT JOIN scenarios p ON p.id = s.parent_scenario_id "
             "WHERE s.roster_id = ? ORDER BY s.created_at DESC",
             (roster_id,),
@@ -241,7 +256,7 @@ def get_scenario(scenario_id: int, roster_id: int, db_path: Path | None = None) 
     with get_connection(db_path) as conn:
         return conn.execute(
             "SELECT id, title, description, created_at, parent_scenario_id, forwards, defense, time_limit, "
-            "algo_version, players_json, result_json FROM scenarios WHERE id = ? AND roster_id = ?",
+            "algo_version, players_json, result_json, dof_json FROM scenarios WHERE id = ? AND roster_id = ?",
             (scenario_id, roster_id),
         ).fetchone()
 

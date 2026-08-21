@@ -92,7 +92,13 @@
   // re-solving something unchanged. Null whenever there's nothing cached for
   // the current origin (nothing loaded, or unloaded via Reset).
   let scenarioOriginMeta = serverLoadedScenario
-    ? { forwards: serverLoadedScenario.forwards, defense: serverLoadedScenario.defense, time_limit: serverLoadedScenario.time_limit, result: serverLoadedScenario.result }
+    ? {
+        forwards: serverLoadedScenario.forwards,
+        defense: serverLoadedScenario.defense,
+        time_limit: serverLoadedScenario.time_limit,
+        result: serverLoadedScenario.result,
+        dof: serverLoadedScenario.dof,
+      }
     : null;
 
   // Loading a scenario only ever makes sense in Scenario mode, full stop -
@@ -102,6 +108,11 @@
   let mode = serverLoadedScenario ? "scenario" : loadStoredMode() || "roster";
   let players = JSON.parse(JSON.stringify(mode === "roster" ? rosterBaseline : scenarioOrigin));
   let lastResult = serverLoadedScenario ? serverLoadedScenario.result : null;
+  // Cached alongside lastResult when a scenario snapshot already has a dof
+  // analysis saved with it - sent back along with the next save so it isn't
+  // silently dropped, and lets re-entering an unchanged scenario show it
+  // instantly instead of waiting on a fresh (expensive) recomputation.
+  let lastDofResult = serverLoadedScenario ? serverLoadedScenario.dof : null;
   let debounceTimer = null;
   // True whenever lastResult may not reflect the players/settings currently
   // on screen - from the moment an edit schedules a solve (even before the
@@ -115,6 +126,21 @@
   const summaryEl = document.getElementById("summary");
   const resultsPanelEl = document.getElementById("results-panel");
   const pendingIndicatorEl = document.getElementById("solve-pending-indicator");
+  const dofPanelEl = document.getElementById("dof-panel");
+  const dofPendingIndicatorEl = document.getElementById("dof-pending-indicator");
+  const dofScoreEl = document.getElementById("dof-score-val");
+  const dofBreakdownBodyEl = document.getElementById("dof-breakdown-body");
+  // Bumped on every new solve; a dof fetch discards its response if this has
+  // moved on by the time it lands, so a superseded (but not necessarily
+  // network-cancelled) request can't clobber a newer result.
+  let dofGeneration = 0;
+  let dofAbortController = null;
+  // True from the moment a new solve is scheduled until dof's own (slower)
+  // response lands - independent of resultPending, since dof keeps computing
+  // after the main solve has already resolved and rendered. Drives dimming
+  // only; last-known numbers stay on screen underneath rather than being
+  // wiped, same treatment as the rest of the stale results panel.
+  let dofPending = false;
   const bannerEl = document.getElementById("status-banner");
   const autoToggle = document.getElementById("auto-solve-toggle");
   const titleInput = document.getElementById("roster-title");
@@ -439,6 +465,20 @@
     const stale = mode === "scenario" && resultPending;
     resultsPanelEl.classList.toggle("stale", stale);
     pendingIndicatorEl.hidden = !stale;
+    // dof has its own, longer-running pending window (it keeps computing
+    // after the quick main solve above has already resolved), so it dims
+    // independently rather than piggybacking on `stale` above.
+    const dofStale = mode === "scenario" && dofPending;
+    dofPanelEl.classList.toggle("dof-stale", dofStale);
+    dofPendingIndicatorEl.hidden = !dofStale;
+  }
+
+  function hideDof() {
+    cancelDof();
+    dofPending = false;
+    lastDofResult = null;
+    dofPanelEl.hidden = true;
+    renderStaleness();
   }
 
   function render() {
@@ -460,6 +500,7 @@
     resultPending = true;
     updateSaveButtonState();
     renderStaleness();
+    cancelDof();
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(doSolve, 400);
   }
@@ -468,6 +509,7 @@
     resultPending = true;
     updateSaveButtonState();
     renderStaleness();
+    cancelDof();
     const settings = currentSettings();
     const resp = await fetch(STUDIO_BASE + "/solve", {
       method: "POST",
@@ -480,6 +522,82 @@
     renderStaleness();
     renderGrid();
     renderBanner();
+    if (lastResult.status === "NO_SOLUTION") {
+      dofPanelEl.hidden = true;
+    } else {
+      // Fire-and-forget: the main solve above already landed and rendered,
+      // so this expensive follow-up (many re-solves) must not block or slow
+      // down the instant-feeling path. It gets superseded/cancelled by
+      // cancelDof() the moment another solve is scheduled.
+      runDof();
+    }
+  }
+
+  function cancelDof() {
+    if (dofAbortController) dofAbortController.abort();
+    dofGeneration++;
+    dofPending = true;
+    renderStaleness();
+  }
+
+  async function runDof() {
+    cancelDof();
+    const myGeneration = dofGeneration;
+    const controller = new AbortController();
+    dofAbortController = controller;
+
+    // Deliberately not touching dofScoreEl/dofBreakdownBodyEl here: the
+    // last-known numbers stay on screen (just dimmed, via dofPending above)
+    // while this computes, rather than being wiped to a loading state.
+    dofPanelEl.hidden = false;
+
+    const settings = currentSettings();
+    let resp;
+    try {
+      resp = await fetch(STUDIO_BASE + "/degrees-of-freedom", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ players: players, forwards: settings.forwards, defense: settings.defense, time_limit: settings.time_limit }),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      return; // aborted (superseded) or network error - next solve retriggers this
+    }
+    if (myGeneration !== dofGeneration) return; // superseded while the request was in flight
+    if (!resp.ok) {
+      dofPending = false;
+      dofPanelEl.hidden = true;
+      renderStaleness();
+      return;
+    }
+    const data = await resp.json();
+    if (myGeneration !== dofGeneration) return;
+    renderDof(data);
+  }
+
+  function renderDof(data) {
+    dofPending = false;
+    if (data.status === "NO_SOLUTION") {
+      lastDofResult = null;
+      dofPanelEl.hidden = true;
+      renderStaleness();
+      return;
+    }
+    lastDofResult = data;
+    dofPanelEl.hidden = false;
+    dofScoreEl.textContent = data.score_per_slot.toFixed(2) + " / slot";
+    dofBreakdownBodyEl.innerHTML = data.by_position
+      .map(function (pf) {
+        const cls = pf.extra_options === 0 ? "stat-rigid" : "";
+        return (
+          '<div class="' + cls + '">' +
+          '<span class="stat-label">' + pf.position + "</span>" +
+          '<span class="stat-val">' + pf.extra_options + "/" + pf.candidates_checked + "</span>" +
+          "</div>"
+        );
+      })
+      .join("");
+    renderStaleness();
   }
 
   tbody.addEventListener("change", (e) => {
@@ -586,6 +704,7 @@
       titleInput.value = rosterTitleBaseline;
       autosizeTitleInput();
       lastResult = null;
+      hideDof();
       render();
     } else {
       render();
@@ -657,6 +776,7 @@
         defense: settings.defense,
         time_limit: settings.time_limit,
         result: lastResult,
+        dof: dofPending ? null : lastDofResult,
       }),
     });
     if (!resp.ok) {
@@ -664,7 +784,13 @@
       return false;
     }
     scenarioOrigin = JSON.parse(JSON.stringify(players));
-    scenarioOriginMeta = { forwards: settings.forwards, defense: settings.defense, time_limit: settings.time_limit, result: lastResult };
+    scenarioOriginMeta = {
+      forwards: settings.forwards,
+      defense: settings.defense,
+      time_limit: settings.time_limit,
+      result: lastResult,
+      dof: dofPending ? null : lastDofResult,
+    };
     updateDirtyState();
     return true;
   }
@@ -700,6 +826,7 @@
         defense: settings.defense,
         time_limit: settings.time_limit,
         result: lastResult,
+        dof: dofPending ? null : lastDofResult,
         parent_scenario_id: loadedScenario ? loadedScenario.id : null,
       }),
     });
@@ -708,7 +835,13 @@
       scenarioTitles.push(title);
       loadedScenario = { id: data.scenario_id, title: title };
       scenarioOrigin = JSON.parse(JSON.stringify(players));
-      scenarioOriginMeta = { forwards: settings.forwards, defense: settings.defense, time_limit: settings.time_limit, result: lastResult };
+      scenarioOriginMeta = {
+        forwards: settings.forwards,
+        defense: settings.defense,
+        time_limit: settings.time_limit,
+        result: lastResult,
+        dof: dofPending ? null : lastDofResult,
+      };
       updatePanelHeading();
       updateSaveButtonLabels();
       updateDirtyState();
@@ -787,6 +920,7 @@
     applyModeUI();
     if (mode === "roster") {
       lastResult = null;
+      hideDof();
       render();
     } else if (scenarioOriginMeta) {
       // A scenario is loaded and its cached result still matches
@@ -797,6 +931,13 @@
       lastResult = scenarioOriginMeta.result;
       resultPending = false;
       render();
+      if (scenarioOriginMeta.dof) {
+        // Already have a cached analysis for this exact snapshot - show it
+        // instantly rather than paying for a fresh (expensive) recomputation.
+        renderDof(scenarioOriginMeta.dof);
+      } else if (lastResult.status !== "NO_SOLUTION") {
+        runDof();
+      }
     } else {
       render();
       doSolve();
