@@ -171,7 +171,7 @@ Run it:
 ```bash
 source ./venv/bin/activate
 pip install -r requirements.txt
-python -m studio.app          # http://127.0.0.1:5000, SQLite at studio/instance/rosters.db
+python -m studio.app          # http://127.0.0.1:5000, SQLite at studio/instance/studio.db
 ```
 
 No signup: visiting `/` mints an anonymous **workspace** — a token in a

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Iterable, Iterator, List, TypedDict
 
 INSTANCE_DIR = Path(__file__).parent / "instance"
-DB_PATH = INSTANCE_DIR / "rosters.db"
+DB_PATH = INSTANCE_DIR / "studio.db"
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 
