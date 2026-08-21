@@ -8,6 +8,24 @@
   const root = document.getElementById("studio-root");
   const serverLoadedScenario = window.LOADED_SCENARIO || null;
 
+  // A given position can only ever be claimed by one of these three columns
+  // at once - this order is also the priority used to resolve any ambiguous
+  // data found on load (e.g. from an older save, or a CSV upload where the
+  // three source columns weren't cross-checked against each other).
+  const POSITION_FIELDS = ["preferred_positions", "secondary_positions", "unwilling_positions"];
+
+  function dedupePositions(player) {
+    for (const pos of POSITIONS) {
+      let claimed = false;
+      for (const field of POSITION_FIELDS) {
+        const at = player[field].indexOf(pos);
+        if (at === -1) continue;
+        if (claimed) player[field].splice(at, 1);
+        else claimed = true;
+      }
+    }
+  }
+
   // Editor mode and auto-solve are per-browser preferences, not roster data -
   // localStorage, not the server, so they never clash across different
   // browsers sharing the same workspace link. Wrapped in try/catch since
@@ -53,6 +71,11 @@
   // rosterBaseline is the roster's own saved players - the only baseline
   // Roster mode ever compares against, and what Reset always falls back to.
   let rosterBaseline = JSON.parse(JSON.stringify(window.INITIAL_ROSTER));
+  rosterBaseline.forEach(dedupePositions);
+  // Same idea for the roster's title - only meaningful/editable in Roster
+  // mode, so scenario mode never reads or resets it. Set once titleInput
+  // exists, just below.
+  let rosterTitleBaseline;
 
   // scenarioOrigin is what "clean" means in Scenario mode: the loaded
   // scenario's snapshot, or the roster baseline if nothing's loaded (a
@@ -63,6 +86,7 @@
   let scenarioOrigin = serverLoadedScenario
     ? JSON.parse(JSON.stringify(serverLoadedScenario.players))
     : JSON.parse(JSON.stringify(rosterBaseline));
+  scenarioOrigin.forEach(dedupePositions);
   // The settings/result that go with scenarioOrigin, so re-entering Scenario
   // mode with the same scenario still loaded can restore them instead of
   // re-solving something unchanged. Null whenever there's nothing cached for
@@ -93,6 +117,16 @@
   const bannerEl = document.getElementById("status-banner");
   const autoToggle = document.getElementById("auto-solve-toggle");
   const titleInput = document.getElementById("roster-title");
+  rosterTitleBaseline = titleInput.value;
+
+  // Grows/shrinks the title input to fit its content instead of clipping
+  // long roster names at a fixed width.
+  function autosizeTitleInput() {
+    titleInput.size = Math.max(titleInput.value.length, 8) + 1;
+  }
+  autosizeTitleInput();
+  titleInput.addEventListener("input", autosizeTitleInput);
+  titleInput.addEventListener("input", () => updateDirtyState());
   const resetBtn = document.getElementById("reset-btn");
   const loadedScenarioNote = document.getElementById("loaded-scenario-note");
   const loadedScenarioTitleEl = document.getElementById("loaded-scenario-title");
@@ -115,7 +149,11 @@
   }
 
   function isDirty() {
-    return JSON.stringify(players) !== JSON.stringify(currentOrigin());
+    const playersDirty = JSON.stringify(players) !== JSON.stringify(currentOrigin());
+    if (mode === "roster") {
+      return playersDirty || titleInput.value !== rosterTitleBaseline;
+    }
+    return playersDirty;
   }
 
   function isRosterPlayer(player) {
@@ -172,6 +210,45 @@
   function isAlt(player) {
     return /^A\d+/.test(player.id);
   }
+
+  function nextPlayerName() {
+    const count = players.filter((p) => !isAlt(p)).length;
+    return "Player " + (count + 1);
+  }
+
+  function nextAltName() {
+    const count = players.filter(isAlt).length;
+    return "Alt " + (count + 1);
+  }
+
+  // Sorting is a one-time reorder triggered by clicking a column header, not
+  // something continuously reapplied on every render - otherwise a row would
+  // jump around under the user's cursor while they're still editing it.
+  let sortField = null;
+  let sortDir = 1;
+
+  function sortPlayers(field) {
+    sortDir = sortField === field ? -sortDir : 1;
+    sortField = field;
+    players.sort((a, b) => {
+      if (field === "name") {
+        return sortDir * (a.name || "").toLowerCase().localeCompare((b.name || "").toLowerCase());
+      }
+      return sortDir * ((a[field] || 0) - (b[field] || 0));
+    });
+    render();
+  }
+
+  function updateSortIndicators() {
+    document.querySelectorAll("th[data-sort]").forEach((th) => {
+      const active = th.dataset.sort === sortField;
+      th.innerHTML = th.dataset.label + '<span class="sort-arrow">' + (active ? (sortDir === 1 ? "▲" : "▼") : "") + "</span>";
+    });
+  }
+
+  document.querySelectorAll("th.sortable").forEach((th) => {
+    th.addEventListener("click", () => sortPlayers(th.dataset.sort));
+  });
 
   function positionChips(player, field) {
     return POSITIONS.map((pos) => {
@@ -240,6 +317,7 @@
   function statusClass(status) {
     if (status === "primary") return "badge status-primary";
     if (status === "secondary") return "badge status-secondary";
+    if (status === "unwilling") return "badge status-unwilling";
     return "badge status-oop";
   }
 
@@ -260,19 +338,25 @@
       summaryEl.innerHTML = "";
       return;
     }
+    function lineCounts(item) {
+      let text = "primary " + item.primary_count + " · secondary " + item.secondary_count + " · oop " + item.oop_count;
+      if (item.unwilling_count > 0) text += ' · <span class="unwilling-flag">unwilling ' + item.unwilling_count + "</span>";
+      return text;
+    }
+
     let html = '<div class="lines-grid">';
     for (const fl of lastResult.forward_lines) {
       html +=
         '<div class="line-card"><h3>Forward ' + fl.line_number + " <span class=\"exp\">exp " + fl.exp_sum + "</span></h3>" +
         fl.slots.map(renderSlot).join("") +
-        '<div class="line-counts">primary ' + fl.primary_count + " · secondary " + fl.secondary_count + " · oop " + fl.oop_count + "</div>" +
+        '<div class="line-counts">' + lineCounts(fl) + "</div>" +
         "</div>";
     }
     for (const dp of lastResult.defense_pairs) {
       html +=
         '<div class="line-card"><h3>Defense ' + dp.pair_number + (dp.partial ? ' <span class="exp">partial</span>' : "") + "</h3>" +
         dp.slots.map(renderSlot).join("") +
-        '<div class="line-counts">primary ' + dp.primary_count + " · secondary " + dp.secondary_count + " · oop " + dp.oop_count + "</div>" +
+        '<div class="line-counts">' + lineCounts(dp) + "</div>" +
         "</div>";
     }
     html += "</div>";
@@ -288,6 +372,9 @@
       '<div><span class="stat-label">Primary</span><span class="stat-val">' + s.total_primary + "</span></div>" +
       '<div><span class="stat-label">Secondary</span><span class="stat-val">' + s.total_secondary + "</span></div>" +
       '<div><span class="stat-label">OOP</span><span class="stat-val">' + s.total_oop + "</span></div>" +
+      (s.total_unwilling > 0
+        ? '<div class="stat-unwilling"><span class="stat-label">Unwilling</span><span class="stat-val">' + s.total_unwilling + "</span></div>"
+        : "") +
       "</div>";
   }
 
@@ -312,6 +399,7 @@
     renderBanner();
     updateDirtyState();
     updateSaveButtonState();
+    updateSortIndicators();
   }
 
   function scheduleSolve() {
@@ -353,12 +441,29 @@
       player.optional_position_override = e.target.value || null;
     } else if (field === "optional_player_link") {
       player.optional_player_link = e.target.value || null;
-    } else if (["preferred_positions", "secondary_positions", "unwilling_positions"].includes(field)) {
+    } else if (POSITION_FIELDS.includes(field)) {
       const pos = e.target.dataset.pos;
       const list = player[field];
       const at = list.indexOf(pos);
-      if (e.target.checked && at === -1) list.push(pos);
-      if (!e.target.checked && at !== -1) list.splice(at, 1);
+      if (e.target.checked) {
+        if (at === -1) list.push(pos);
+        // A position can only be claimed by one column at a time - clear it
+        // from the other two so this acts like a radio group per position,
+        // except "none checked" (implicitly OOP) is still a valid state.
+        let clearedElsewhere = false;
+        for (const otherField of POSITION_FIELDS) {
+          if (otherField === field) continue;
+          const otherList = player[otherField];
+          const otherAt = otherList.indexOf(pos);
+          if (otherAt !== -1) {
+            otherList.splice(otherAt, 1);
+            clearedElsewhere = true;
+          }
+        }
+        if (clearedElsewhere) renderRoster();
+      } else if (at !== -1) {
+        list.splice(at, 1);
+      }
     }
     updateDirtyState();
     scheduleSolve();
@@ -379,9 +484,9 @@
   }
 
   document.getElementById("add-player-btn").addEventListener("click", () => {
-    players.push({
+    players.unshift({
       id: nextId("P"),
-      name: "",
+      name: nextPlayerName(),
       available: 1,
       experience: 1,
       preferred_positions: [],
@@ -395,9 +500,9 @@
   });
 
   document.getElementById("add-alt-btn").addEventListener("click", () => {
-    players.push({
+    players.unshift({
       id: nextId("A"),
-      name: "",
+      name: nextAltName(),
       available: 1,
       experience: 3,
       preferred_positions: POSITIONS.slice(),
@@ -420,6 +525,8 @@
     }
     players = JSON.parse(JSON.stringify(rosterBaseline));
     if (mode === "roster") {
+      titleInput.value = rosterTitleBaseline;
+      autosizeTitleInput();
       lastResult = null;
       render();
     } else {
@@ -447,13 +554,14 @@
     const resp = await fetch(STUDIO_BASE + "/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ players: players }),
+      body: JSON.stringify({ players: players, title: titleInput.value }),
     });
     if (!resp.ok) {
       alert("Save failed.");
       return false;
     }
     rosterBaseline = JSON.parse(JSON.stringify(players));
+    rosterTitleBaseline = titleInput.value;
     if (!loadedScenario) scenarioOrigin = JSON.parse(JSON.stringify(rosterBaseline));
     updateDirtyState();
     return true;
@@ -611,6 +719,7 @@
     for (const btn of modeToggle.querySelectorAll(".mode-toggle-btn")) {
       btn.setAttribute("aria-selected", btn.dataset.mode === mode ? "true" : "false");
     }
+    titleInput.readOnly = mode === "scenario";
     loadedScenarioNote.hidden = !(mode === "scenario" && loadedScenario);
     updateSaveButtonLabels();
   }

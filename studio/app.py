@@ -87,17 +87,26 @@ def _row_to_player_in_dict(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def _players_to_records(players: list[PlayerIn]) -> list[db.PlayerRecord]:
-    return [
-        {
-            "player_key": p.id,
-            "name": p.name,
-            "experience": p.experience,
-            "preferred_positions": p.preferred_positions,
-            "secondary_positions": p.secondary_positions,
-            "unwilling_positions": p.unwilling_positions,
-        }
-        for p in players
-    ]
+    records: list[db.PlayerRecord] = []
+    for p in players:
+        preferred = list(p.preferred_positions)
+        secondary = list(p.secondary_positions)
+        unwilling = list(p.unwilling_positions)
+        # Safety net alongside studio.js's own dedupePositions - the DB should
+        # never end up with a position claimed by more than one column, even
+        # if a client posted here directly instead of through the UI.
+        _dedupe_position_columns(preferred, secondary, unwilling)
+        records.append(
+            {
+                "player_key": p.id,
+                "name": p.name,
+                "experience": p.experience,
+                "preferred_positions": preferred,
+                "secondary_positions": secondary,
+                "unwilling_positions": unwilling,
+            }
+        )
+    return records
 
 
 ROSTER_TEMPLATE_CSV = (
@@ -128,6 +137,21 @@ def _parse_positions(raw: str | None) -> list[str]:
     return [p for p in POSITIONS if p in expanded] + sorted(expanded - set(POSITIONS))
 
 
+def _dedupe_position_columns(preferred: list[str], secondary: list[str], unwilling: list[str]) -> None:
+    """A position can only be claimed by one of the three columns - resolved
+    with preferred > secondary > unwilling if the source CSV's three columns
+    disagreed (parsed independently, so nothing stops them overlapping).
+    Mutates secondary/unwilling in place; mirrors studio.js's dedupePositions."""
+    for pos in preferred:
+        if pos in secondary:
+            secondary.remove(pos)
+        if pos in unwilling:
+            unwilling.remove(pos)
+    for pos in secondary:
+        if pos in unwilling:
+            unwilling.remove(pos)
+
+
 def _players_from_csv_upload(text: str) -> list[db.PlayerRecord]:
     """Best-effort CSV -> PlayerRecord: only `name` is required, everything
     else falls back to a sensible default so users can fix it up by hand
@@ -144,14 +168,18 @@ def _players_from_csv_upload(text: str) -> list[db.PlayerRecord]:
             rank = int((row.get("rank") or row.get("experience") or "").strip())
         except ValueError:
             rank = 1
+        preferred = _parse_positions(row.get("preferred_positions"))
+        secondary = _parse_positions(row.get("secondary_positions"))
+        unwilling = _parse_positions(row.get("unwilling_positions"))
+        _dedupe_position_columns(preferred, secondary, unwilling)
         records.append(
             {
                 "player_key": f"P{len(records) + 1:02d}",
                 "name": name,
                 "experience": rank,
-                "preferred_positions": _parse_positions(row.get("preferred_positions")),
-                "secondary_positions": _parse_positions(row.get("secondary_positions")),
-                "unwilling_positions": _parse_positions(row.get("unwilling_positions")),
+                "preferred_positions": preferred,
+                "secondary_positions": secondary,
+                "unwilling_positions": unwilling,
             }
         )
     return records
@@ -318,6 +346,9 @@ def studio_save(roster_id: int):
     body = request.get_json(silent=True) or {}
     players = _parse_players(body.get("players"))
     db.replace_players(roster_id, _players_to_records(players))
+    title = (body.get("title") or "").strip()
+    if title:
+        db.rename_roster(roster_id, workspace["id"], title)
     return jsonify({"roster_id": roster_id})
 
 

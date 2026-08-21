@@ -7,15 +7,15 @@
     <div class="title-group">
       <a class="back-link" href="{{ url_for('rosters_list') }}">&larr; Rosters</a>
       <input id="roster-title" type="text" value="{{ roster['title'] }}">
+      <div class="mode-toggle" id="mode-toggle" role="tablist" aria-label="Editor mode">
+        <button type="button" class="mode-toggle-btn" data-mode="roster" role="tab">Roster</button>
+        <button type="button" class="mode-toggle-btn" data-mode="scenario" role="tab">Scenario</button>
+      </div>
       <span id="loaded-scenario-note" class="loaded-scenario-note" {% if not loaded_scenario %}hidden{% endif %}>
         Loaded from scenario: <span id="loaded-scenario-title">{{ loaded_scenario['title'] if loaded_scenario }}</span>
       </span>
     </div>
     <div class="actions">
-      <div class="mode-toggle" id="mode-toggle" role="tablist" aria-label="Editor mode">
-        <button type="button" class="mode-toggle-btn" data-mode="roster" role="tab">Roster</button>
-        <button type="button" class="mode-toggle-btn" data-mode="scenario" role="tab">Scenario</button>
-      </div>
       <label class="switch" id="auto-solve-label">
         <input type="checkbox" id="auto-solve-toggle" checked>
         <span>Auto-solve</span>
@@ -83,8 +83,8 @@
         <thead>
           <tr>
             <th></th>
-            <th>Name</th>
-            <th>Exp</th>
+            <th class="sortable" data-sort="name" data-label="Name">Name</th>
+            <th class="sortable" data-sort="experience" data-label="Exp">Exp</th>
             <th class="col-ephemeral">Avail</th>
             <th>Preferred</th>
             <th>Secondary</th>

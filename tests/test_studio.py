@@ -65,6 +65,7 @@ def _fake_result(status="NO_SOLUTION"):
             "total_primary": 0,
             "total_secondary": 0,
             "total_oop": 0,
+            "total_unwilling": 0,
         },
         "forward_lines": [],
         "defense_pairs": [],
@@ -148,6 +149,32 @@ def test_save_persists_unwilling_positions_but_not_ephemeral_fields(client, stud
     assert b'"optional_position_override": null' in resp.data
     assert b'"optional_player_link": null' in resp.data
     assert b'"available": 1' in resp.data
+
+
+def test_save_with_a_title_renames_the_roster(client, studio):
+    _, db_module = studio
+    token, roster_id = _create_roster(client, title="Original Title")
+    workspace = db_module.get_workspace_by_token(token)
+
+    resp = client.post(
+        f"/w/{token}/studio/{roster_id}/save",
+        json={"players": SMALL_PLAYERS, "title": "Renamed Title"},
+    )
+    assert resp.status_code == 200
+    assert db_module.get_roster(roster_id, workspace["id"])["title"] == "Renamed Title"
+
+    resp = client.get(f"/w/{token}/studio/{roster_id}")
+    assert b"Renamed Title" in resp.data
+
+
+def test_save_without_a_title_leaves_the_roster_name_untouched(client, studio):
+    _, db_module = studio
+    token, roster_id = _create_roster(client, title="Keep Me")
+    workspace = db_module.get_workspace_by_token(token)
+
+    resp = _save_roster(client, token, roster_id, SMALL_PLAYERS)
+    assert resp.status_code == 200
+    assert db_module.get_roster(roster_id, workspace["id"])["title"] == "Keep Me"
 
 
 def test_save_as_creates_an_independent_roster(client, studio):
@@ -296,6 +323,60 @@ def test_csv_upload_expands_position_shortcuts_and_slash_combos(client, studio):
     assert players["Utility"] == "LW;C;RW;LD;RD"
     assert players["Hybrid"] == "LW;C;RW"
     assert players["MixedDelims"] == "LW;C;RW"
+
+
+def test_csv_upload_resolves_a_position_claimed_by_multiple_columns(client, studio):
+    # The three position columns are parsed independently, so nothing stops
+    # a CSV from claiming the same position in more than one of them -
+    # resolved preferred > secondary > unwilling.
+    _, db_module = studio
+    token = _workspace_token(client)
+
+    csv_bytes = (
+        b"name,preferred_positions,secondary_positions,unwilling_positions\n"
+        b"Ambiguous1,LW,LW,\n"
+        b"Ambiguous2,,RW,RW\n"
+        b"Ambiguous3,C,C,C\n"
+    )
+    resp = _upload_csv(client, token, csv_bytes)
+    roster_id = int(resp.headers["Location"].rstrip("/").rsplit("/", 1)[-1])
+    players = {p["name"]: p for p in db_module.list_players(roster_id)}
+
+    assert players["Ambiguous1"]["preferred_positions"] == "LW"
+    assert players["Ambiguous1"]["secondary_positions"] == ""
+
+    assert players["Ambiguous2"]["secondary_positions"] == "RW"
+    assert players["Ambiguous2"]["unwilling_positions"] == ""
+
+    assert players["Ambiguous3"]["preferred_positions"] == "C"
+    assert players["Ambiguous3"]["secondary_positions"] == ""
+    assert players["Ambiguous3"]["unwilling_positions"] == ""
+
+
+def test_save_resolves_a_position_claimed_by_multiple_columns(client, studio):
+    # Safety net at the persistence layer, independent of studio.js's own
+    # client-side enforcement - a direct API call can still send ambiguous
+    # data, and it must not reach the DB that way.
+    _, db_module = studio
+    token, roster_id = _create_roster(client)
+
+    players = [
+        {
+            "id": "P1",
+            "name": "Ambiguous",
+            "experience": 3,
+            "preferred_positions": ["LW"],
+            "secondary_positions": ["LW", "RW"],
+            "unwilling_positions": ["RW", "C"],
+        }
+    ]
+    resp = client.post(f"/w/{token}/studio/{roster_id}/save", json={"players": players})
+    assert resp.status_code == 200
+
+    row = db_module.list_players(roster_id)[0]
+    assert row["preferred_positions"] == "LW"
+    assert row["secondary_positions"] == "RW"
+    assert row["unwilling_positions"] == "C"
 
 
 def test_csv_upload_without_a_name_column_shows_an_error_and_creates_nothing(client, studio):

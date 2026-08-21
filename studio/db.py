@@ -105,6 +105,14 @@ def delete_roster(roster_id: int, workspace_id: int, db_path: Path | None = None
         conn.execute("DELETE FROM rosters WHERE id = ? AND workspace_id = ?", (roster_id, workspace_id))
 
 
+def rename_roster(roster_id: int, workspace_id: int, title: str, db_path: Path | None = None) -> None:
+    with get_connection(db_path) as conn:
+        conn.execute(
+            "UPDATE rosters SET title = ? WHERE id = ? AND workspace_id = ?",
+            (title, roster_id, workspace_id),
+        )
+
+
 def create_roster(workspace_id: int, title: str, db_path: Path | None = None) -> int:
     with get_connection(db_path) as conn:
         cur = conn.execute("INSERT INTO rosters (workspace_id, title) VALUES (?, ?)", (workspace_id, title))
