@@ -56,6 +56,39 @@ def test_optional_position_override_beats_prefs_and_unwilling():
     assert result.summary.total_unwilling == 1
 
 
+def test_optional_position_override_forces_assignment_and_can_cause_infeasibility():
+    # An override doesn't just restrict *where* a player can go, it forces
+    # *whether* - two players locked to the same position, with only one
+    # slot for it, must surface as infeasible rather than quietly benching
+    # one of them.
+    rows = [
+        {"id": "P1", "name": "A", "available": "1", "experience": "3", "preferred_positions": "LW", "secondary_positions": "", "optional_position_override": "LW"},
+        {"id": "P2", "name": "B", "available": "1", "experience": "3", "preferred_positions": "LW", "secondary_positions": "", "optional_position_override": "LW"},
+        {"id": "P3", "name": "C", "available": "1", "experience": "3", "preferred_positions": "C", "secondary_positions": ""},
+        {"id": "P4", "name": "D", "available": "1", "experience": "3", "preferred_positions": "RW", "secondary_positions": ""},
+    ]
+    players = solver.players_from_rows(rows)
+    result = solver.solve_lines(players, 1, 0, 10)  # 1 forward line -> exactly one LW slot
+    assert result.status == "NO_SOLUTION"
+
+
+def test_optional_position_override_does_not_force_an_unavailable_player_onto_the_ice():
+    # available beats override: marking a locked player unavailable is still
+    # how you bench them for a what-if, rather than the override contradicting
+    # availability and making the roster infeasible.
+    rows = [
+        {"id": "P1", "name": "A", "available": "0", "experience": "3", "preferred_positions": "LW", "secondary_positions": "", "optional_position_override": "LW"},
+        {"id": "P2", "name": "B", "available": "1", "experience": "3", "preferred_positions": "LW", "secondary_positions": ""},
+        {"id": "P3", "name": "C", "available": "1", "experience": "3", "preferred_positions": "C", "secondary_positions": ""},
+        {"id": "P4", "name": "D", "available": "1", "experience": "3", "preferred_positions": "RW", "secondary_positions": ""},
+    ]
+    players = solver.players_from_rows(rows)
+    result = solver.solve_lines(players, 1, 0, 10)
+    assert result.status in ("OPTIMAL", "FEASIBLE")
+    assigned_ids = [pid for pid, _, _ in all_assignments(result)]
+    assert "P1" not in assigned_ids
+
+
 def test_optional_player_link_forces_same_forward_line():
     rows = [
         {"id": "P1", "name": "A", "available": "1", "experience": "3", "preferred_positions": "LW", "secondary_positions": "", "optional_player_link": "P4"},

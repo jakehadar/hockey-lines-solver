@@ -32,18 +32,52 @@
     if (e.key === "Escape") closeMenu();
   });
 
-  copyBtn.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(window.location.origin + "/w/" + window.WORKSPACE_TOKEN + "/rosters");
-    } catch (err) {
-      // Clipboard permission denied or unavailable — the link is still visible in the address bar.
+  async function copyText(text) {
+    // navigator.clipboard is only exposed in secure contexts (https, or
+    // localhost) - on plain http (e.g. this app reached over a Tailscale/LAN
+    // IP), it's simply undefined on iOS Safari, so this throws immediately.
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (err) {
+        // fall through to the legacy fallback below
+      }
     }
-    copyBtn.classList.add("copied");
-    copyLabel.textContent = "Link copied";
+    // Legacy execCommand fallback: not gated by secure-context, so it's what
+    // actually works for plain-http mobile Safari.
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } catch (err) {
+      ok = false;
+    }
+    document.body.removeChild(textarea);
+    return ok;
+  }
+
+  copyBtn.addEventListener("click", async () => {
+    const link = window.location.origin + "/w/" + window.WORKSPACE_TOKEN + "/rosters";
+    const ok = await copyText(link);
+    copyBtn.classList.remove("copied", "copy-failed");
+    if (ok) {
+      copyBtn.classList.add("copied");
+      copyLabel.textContent = "Link copied";
+    } else {
+      copyBtn.classList.add("copy-failed");
+      copyLabel.textContent = link;
+    }
     setTimeout(() => {
-      copyBtn.classList.remove("copied");
+      copyBtn.classList.remove("copied", "copy-failed");
       copyLabel.textContent = "Copy workspace link";
-    }, 1600);
+    }, ok ? 1600 : 4000);
   });
 
   if (toastClose) {

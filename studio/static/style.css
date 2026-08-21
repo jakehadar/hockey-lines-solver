@@ -96,8 +96,19 @@ body {
   font-size: 0.88rem;
   font-weight: 600;
 }
-.ws-copy-btn:hover { opacity: 0.92; }
+.ws-copy-btn:hover { opacity: 0.92; color: #fff; }
 .ws-copy-btn.copied { background: var(--ok); border-color: var(--ok); }
+.ws-copy-btn.copy-failed {
+  background: var(--danger);
+  border-color: var(--danger);
+  flex-wrap: wrap;
+  white-space: normal;
+  word-break: break-all;
+  font-weight: 400;
+  font-size: 0.78rem;
+  user-select: text;
+  -webkit-user-select: text;
+}
 .ws-copy-caption { margin: 0.5rem 0 0; font-size: 0.75rem; color: var(--muted); line-height: 1.4; text-align: center; }
 
 .ws-toast {
@@ -247,17 +258,28 @@ dialog#scenario-dialog h2, dialog#unsaved-dialog h2 { margin: 0 0 1rem; font-siz
   flex-wrap: wrap;
   margin-bottom: 1rem;
 }
-.title-group { display: flex; align-items: center; gap: 0.75rem; }
-.back-link { color: var(--muted); text-decoration: none; font-size: 0.85rem; }
-#roster-title { font-size: 1.2rem; font-weight: 700; border: 1px solid transparent; border-radius: var(--radius); padding: 0.2rem 0.4rem; background: transparent; }
+.title-group { display: flex; align-items: baseline; gap: 0.75rem; flex: 1 1 auto; min-width: 0; }
+.back-link { color: var(--muted); text-decoration: none; font-size: 0.85rem; flex-shrink: 0; }
+#roster-title {
+  font-size: 1.2rem;
+  font-weight: 700;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 0.2rem 0.4rem;
+  background: transparent;
+  flex: 1 1 auto;
+  min-width: 4rem;
+  max-width: 32rem;
+}
 #roster-title:not([readonly]):hover, #roster-title:not([readonly]):focus { border-color: var(--border); background: var(--panel); }
 #roster-title[readonly] { color: var(--muted); cursor: default; }
-.actions { display: flex; align-items: center; gap: 0.5rem; }
+.actions { display: flex; align-items: center; gap: 0.5rem; flex: 0 0 auto; }
 
 .switch { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--muted); }
 
 .status-banner { padding: 0.6rem 0.9rem; border-radius: var(--radius); margin-bottom: 1rem; font-size: 0.9rem; font-weight: 600; }
 .status-banner.ok { background: var(--ok-weak); color: var(--ok); }
+.status-banner.suboptimal { background: #fff2cc; color: #8a6d00; }
 .status-banner.infeasible { background: var(--danger-weak); color: var(--danger); }
 
 /* Layout */
@@ -273,6 +295,24 @@ dialog#scenario-dialog h2, dialog#unsaved-dialog h2 { margin: 0 0 1rem; font-siz
 }
 .panel-header { display: flex; justify-content: space-between; align-items: center; }
 .add-buttons { display: flex; gap: 0.5rem; }
+
+/* Stale-results indicator: the grid/summary are wholesale-replaced on every
+   solve, so the dimming targets them directly rather than trying to persist
+   an overlay across those re-renders. */
+#grid, #summary { transition: opacity 0.15s ease; }
+.results-panel.stale #grid, .results-panel.stale #summary { opacity: 0.45; pointer-events: none; }
+.pending-indicator { display: inline-flex; align-items: center; gap: 0.35rem; font-weight: 600; }
+.pending-indicator[hidden] { display: none; }
+.pending-indicator::before {
+  content: "";
+  width: 0.7em;
+  height: 0.7em;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: pending-spin 0.7s linear infinite;
+}
+@keyframes pending-spin { to { transform: rotate(360deg); } }
 
 .solve-settings { display: flex; gap: 1rem; margin: 0.75rem 0; font-size: 0.85rem; color: var(--muted); }
 .solve-settings input { width: 4em; margin-left: 0.3rem; }
@@ -293,7 +333,6 @@ dialog#scenario-dialog h2, dialog#unsaved-dialog h2 { margin: 0 0 1rem; font-siz
 
 .badge { display: inline-block; font-size: 0.7rem; font-weight: 700; padding: 0.1rem 0.4rem; border-radius: 999px; background: var(--accent-weak); color: var(--accent); }
 .badge.alt { background: #fff2cc; color: #8a6d00; }
-.loaded-scenario-note { font-size: 0.8rem; color: var(--muted); }
 .branched-from { color: var(--muted); font-weight: 400; }
 
 /* Roster mode: no ephemeral fields, no solver */

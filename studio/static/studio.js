@@ -104,9 +104,8 @@
   let lastResult = serverLoadedScenario ? serverLoadedScenario.result : null;
   let debounceTimer = null;
   // True whenever lastResult may not reflect the players/settings currently
-  // on screen - from the moment a solve is kicked off until it resolves.
-  // Doesn't cover the ~400ms debounce window before a solve starts; that
-  // residual gap is accepted as a tradeoff for keeping this simple.
+  // on screen - from the moment an edit schedules a solve (even before the
+  // debounce timer fires) until that solve's response comes back.
   let resultPending = !serverLoadedScenario;
   let scenarioTitles = (window.EXISTING_SCENARIO_TITLES || []).slice();
   let pendingModeSwitch = null;
@@ -114,6 +113,8 @@
   const tbody = document.getElementById("roster-tbody");
   const gridEl = document.getElementById("grid");
   const summaryEl = document.getElementById("summary");
+  const resultsPanelEl = document.getElementById("results-panel");
+  const pendingIndicatorEl = document.getElementById("solve-pending-indicator");
   const bannerEl = document.getElementById("status-banner");
   const autoToggle = document.getElementById("auto-solve-toggle");
   const titleInput = document.getElementById("roster-title");
@@ -128,9 +129,9 @@
   titleInput.addEventListener("input", autosizeTitleInput);
   titleInput.addEventListener("input", () => updateDirtyState());
   const resetBtn = document.getElementById("reset-btn");
-  const loadedScenarioNote = document.getElementById("loaded-scenario-note");
-  const loadedScenarioTitleEl = document.getElementById("loaded-scenario-title");
+  const panelHeadingEl = document.getElementById("roster-panel-heading");
   const modeToggle = document.getElementById("mode-toggle");
+  const solveNowBtn = document.getElementById("solve-now-btn");
   const saveBtn = document.getElementById("save-btn");
   const saveMenu = document.getElementById("save-menu");
   const saveMenuToggle = document.getElementById("save-menu-toggle");
@@ -174,6 +175,11 @@
     const disabled = mode === "scenario" && resultPending;
     saveBtn.disabled = disabled;
     saveAltBtn.disabled = disabled;
+    saveMenuToggle.disabled = disabled;
+    // Also covers "Solve now": a solve already in flight (or about to be,
+    // once the debounce timer fires) shouldn't be kickable again on top of
+    // itself.
+    solveNowBtn.disabled = disabled;
   }
 
   function updateSaveButtonLabels() {
@@ -183,6 +189,16 @@
     } else {
       saveBtn.textContent = "Save scenario";
       saveAltBtn.textContent = "Branch scenario…";
+    }
+  }
+
+  function updatePanelHeading() {
+    if (mode === "roster") {
+      panelHeadingEl.textContent = "Roster";
+    } else if (loadedScenario) {
+      panelHeadingEl.textContent = "Scenario: " + loadedScenario.title;
+    } else {
+      panelHeadingEl.textContent = "Scenario";
     }
   }
 
@@ -393,10 +409,36 @@
     if (lastResult.status === "NO_SOLUTION") {
       bannerEl.className = "status-banner infeasible";
       bannerEl.textContent = "No feasible solution for the current roster/constraints. Adjust and retry, or hit Reset.";
+      return;
+    }
+    const s = lastResult.summary;
+    const compromises = [];
+    if (s.total_secondary > 0) compromises.push(s.total_secondary + " secondary");
+    if (s.total_oop > 0) compromises.push(s.total_oop + " out-of-position");
+    if (compromises.length) {
+      // A solved status here (OPTIMAL/FEASIBLE) only means the solver met the
+      // hard constraints - it says nothing about whether players actually
+      // got their preferred position. Surface that distinctly so a technically-
+      // solved but heavily-compromised roster doesn't read as an all-clear.
+      const total = s.total_secondary + s.total_oop;
+      bannerEl.className = "status-banner suboptimal";
+      bannerEl.textContent =
+        "Status: SUBOPTIMAL — " +
+        compromises.join(", ") +
+        " assignment" + (total > 1 ? "s" : "") +
+        ". Feasible, but the roster is too constrained for everyone to play their preferred position.";
     } else {
       bannerEl.className = "status-banner ok";
       bannerEl.textContent = "Status: " + lastResult.status;
     }
+  }
+
+  function renderStaleness() {
+    // Grid/summary are wholesale-replaced by renderGrid(), so this lives as
+    // a sibling badge + a class on the panel rather than inside either of them.
+    const stale = mode === "scenario" && resultPending;
+    resultsPanelEl.classList.toggle("stale", stale);
+    pendingIndicatorEl.hidden = !stale;
   }
 
   function render() {
@@ -405,11 +447,19 @@
     renderBanner();
     updateDirtyState();
     updateSaveButtonState();
+    renderStaleness();
     updateSortIndicators();
   }
 
   function scheduleSolve() {
     if (mode !== "scenario" || !autoToggle.checked) return;
+    // The result becomes stale the instant an edit happens, not just once
+    // doSolve() actually starts - marking it pending only there left a ~400ms
+    // debounce window (plus solve time) where the save button stayed
+    // wrongly enabled, then flashed disabled for the brief tail end.
+    resultPending = true;
+    updateSaveButtonState();
+    renderStaleness();
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(doSolve, 400);
   }
@@ -417,6 +467,7 @@
   async function doSolve() {
     resultPending = true;
     updateSaveButtonState();
+    renderStaleness();
     const settings = currentSettings();
     const resp = await fetch(STUDIO_BASE + "/solve", {
       method: "POST",
@@ -426,6 +477,7 @@
     lastResult = resp.ok ? await resp.json() : { status: "NO_SOLUTION" };
     resultPending = false;
     updateSaveButtonState();
+    renderStaleness();
     renderGrid();
     renderBanner();
   }
@@ -526,7 +578,7 @@
       loadedScenario = null;
       scenarioOrigin = JSON.parse(JSON.stringify(rosterBaseline));
       scenarioOriginMeta = null;
-      loadedScenarioNote.hidden = true;
+      updatePanelHeading();
       updateSaveButtonLabels();
     }
     players = JSON.parse(JSON.stringify(rosterBaseline));
@@ -542,7 +594,7 @@
   }
 
   resetBtn.addEventListener("click", doReset);
-  document.getElementById("solve-now-btn").addEventListener("click", doSolve);
+  solveNowBtn.addEventListener("click", doSolve);
 
   autoToggle.checked = loadStoredAutoSolve();
 
@@ -657,8 +709,7 @@
       loadedScenario = { id: data.scenario_id, title: title };
       scenarioOrigin = JSON.parse(JSON.stringify(players));
       scenarioOriginMeta = { forwards: settings.forwards, defense: settings.defense, time_limit: settings.time_limit, result: lastResult };
-      loadedScenarioTitleEl.textContent = title;
-      loadedScenarioNote.hidden = false;
+      updatePanelHeading();
       updateSaveButtonLabels();
       updateDirtyState();
       scenarioDialog.close();
@@ -726,7 +777,7 @@
       btn.setAttribute("aria-selected", btn.dataset.mode === mode ? "true" : "false");
     }
     titleInput.readOnly = mode === "scenario";
-    loadedScenarioNote.hidden = !(mode === "scenario" && loadedScenario);
+    updatePanelHeading();
     updateSaveButtonLabels();
   }
 

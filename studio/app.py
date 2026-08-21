@@ -158,8 +158,24 @@ def _players_from_csv_upload(text: str) -> list[db.PlayerRecord]:
     afterward. Rows without a name and columns we don't recognize are
     silently skipped/ignored rather than treated as errors. There's no
     "available" column - it's ephemeral, scenario-only, never part of the
-    roster."""
+    roster.
+
+    A source `id` is honored when present - notably, an "A01"-style id is
+    how a row is marked as an alt (see isAlt() in studio.js), so discarding
+    it here would silently turn alts into regular players. Rows without one
+    get a generated "P01"-style id instead."""
     records: list[db.PlayerRecord] = []
+    used_keys: set[str] = set()
+    next_seq = 1
+
+    def next_generated_key() -> str:
+        nonlocal next_seq
+        while True:
+            key = f"P{next_seq:02d}"
+            next_seq += 1
+            if key not in used_keys:
+                return key
+
     for row in csv.DictReader(io.StringIO(text)):
         name = (row.get("name") or "").strip()
         if not name:
@@ -172,9 +188,11 @@ def _players_from_csv_upload(text: str) -> list[db.PlayerRecord]:
         secondary = _parse_positions(row.get("secondary_positions"))
         unwilling = _parse_positions(row.get("unwilling_positions"))
         _dedupe_position_columns(preferred, secondary, unwilling)
+        player_key = (row.get("id") or "").strip() or next_generated_key()
+        used_keys.add(player_key)
         records.append(
             {
-                "player_key": f"P{len(records) + 1:02d}",
+                "player_key": player_key,
                 "name": name,
                 "experience": rank,
                 "preferred_positions": preferred,

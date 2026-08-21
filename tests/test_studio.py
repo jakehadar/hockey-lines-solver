@@ -379,6 +379,31 @@ def test_save_resolves_a_position_claimed_by_multiple_columns(client, studio):
     assert row["unwilling_positions"] == "C"
 
 
+def test_csv_upload_honors_a_source_id_column_so_alts_stay_alts(client, studio):
+    # Alt-ness is derived purely from an "A01"-style id (see isAlt() in
+    # studio.js) - discarding a source CSV's own ids and always generating
+    # sequential "P01"-style ones would silently turn alts into regular
+    # players. Rows with no id of their own should still get one generated.
+    _, db_module = studio
+    token = _workspace_token(client)
+
+    csv_bytes = (
+        b"id,name,preferred_positions\n"
+        b"P01,Ali,LD;RD\n"
+        b",Nameless,LW\n"  # blank id -> should get a generated one
+        b"A01,Alex,C\n"
+        b"A02,Luca,C\n"
+    )
+    resp = _upload_csv(client, token, csv_bytes)
+    roster_id = int(resp.headers["Location"].rstrip("/").rsplit("/", 1)[-1])
+    players = {p["name"]: p["player_key"] for p in db_module.list_players(roster_id)}
+
+    assert players["Ali"] == "P01"
+    assert players["Alex"] == "A01"
+    assert players["Luca"] == "A02"
+    assert players["Nameless"] == "P02"  # generated, and must not collide with Ali's explicit P01
+
+
 def test_csv_upload_without_a_name_column_shows_an_error_and_creates_nothing(client, studio):
     _, db_module = studio
     token = _workspace_token(client)
@@ -656,11 +681,14 @@ def test_loading_a_scenario_seeds_players_but_leaves_the_roster_untouched(client
     resp = client.get(f"/w/{token}/studio/{roster_id}?load_scenario={scenario_id}")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
-    assert '<span id="loaded-scenario-title">Bench Bob</span>' in body
 
     initial_roster = _extract_json_var(body, "INITIAL_ROSTER")
     loaded_scenario = _extract_json_var(body, "LOADED_SCENARIO")
 
+    # The scenario's title is surfaced client-side (studio.js renders it into
+    # the roster/scenario panel heading), not as server-rendered markup - so
+    # what matters here is that the data reaches the page at all.
+    assert loaded_scenario["title"] == "Bench Bob"
     assert [p["id"] for p in initial_roster] == ["P1", "P2", "P3"]  # the roster's real saved players
     assert [p["id"] for p in loaded_scenario["players"]] == ["P1"]  # the scenario's snapshot
     assert loaded_scenario["result"]["status"] == "OPTIMAL"

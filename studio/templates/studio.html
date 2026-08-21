@@ -11,9 +11,6 @@
         <button type="button" class="mode-toggle-btn" data-mode="roster" role="tab">Roster</button>
         <button type="button" class="mode-toggle-btn" data-mode="scenario" role="tab">Scenario</button>
       </div>
-      <span id="loaded-scenario-note" class="loaded-scenario-note" {% if not loaded_scenario %}hidden{% endif %}>
-        Loaded from scenario: <span id="loaded-scenario-title">{{ loaded_scenario['title'] if loaded_scenario }}</span>
-      </span>
     </div>
     <div class="actions">
       <label class="switch" id="auto-solve-label">
@@ -68,7 +65,7 @@
   <div class="studio-layout">
     <section class="roster-panel">
       <div class="panel-header">
-        <h2>Roster</h2>
+        <h2 id="roster-panel-heading">Roster</h2>
         <div class="add-buttons">
           <button id="add-player-btn" type="button">+ Add player</button>
           <button id="add-alt-btn" type="button">+ Add alt</button>
@@ -98,8 +95,8 @@
       </table>
     </section>
 
-    <section class="results-panel">
-      <h2>Lines</h2>
+    <section class="results-panel" id="results-panel">
+      <h2>Lines <span id="solve-pending-indicator" class="pending-indicator" hidden aria-label="Updating"></span></h2>
       <div id="grid"></div>
       <h2>Summary</h2>
       <div id="summary"></div>

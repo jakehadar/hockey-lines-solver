@@ -24,10 +24,22 @@ CSV format (header): `id,name,available,experience,preferred_positions,secondary
 
 Optional columns (omit entirely for a roster CSV that predates these — fully backwards compatible):
 - `unwilling_positions`: semicolon-separated positions this player must never be assigned to (hard constraint).
-- `optional_position_override`: a single position; if set, it's the *only* position this player may be assigned to, overriding preferred/secondary/unwilling. Meant for quick what-if tweaks without editing a player's actual preferences.
+- `optional_position_override`: a single position; if set, it's the *only* position this player may be assigned to, overriding preferred/secondary/unwilling — and it forces them onto the ice at that position (not just restricts where), so the solver has to seat them rather than treating it as a suggestion it's free to skip. Meant for quick what-if tweaks without editing a player's actual preferences.
 - `optional_player_link`: another player's id; forces both players onto the same forward line or defense pair together (or both benched together). Works for forwards and defense.
 
+### Precedence
+
+These levers aren't independent — each overrides the ones below it:
+
+1. **`available`** — the final word. An unavailable player never takes the ice, full stop, even if overridden.
+2. **`optional_position_override`** — locks an *available* player to one exact position and forces them onto it; the solver solves the rest of the roster around that lock. If there isn't room for it (e.g. more players overridden to the same position than there are slots for it), the solve goes infeasible rather than quietly dropping the override.
+3. **`preferred_positions` / `secondary_positions` / `unwilling_positions`** — the normal preference/eligibility model the solver optimizes against for every player who isn't overridden. A player who should merely *prefer* a position but can still be benched if it helps the lines doesn't need an override at all — that's exactly what `preferred_positions` (with everything else left secondary or unwilling) already expresses.
+
 These optional levers do no validation — an unsatisfiable combination (e.g. two players both overridden to the same position with only one such slot, or conflicting links) will simply make the solve infeasible (`NO_SOLUTION`) rather than raising an error.
+
+### Nondeterminism
+
+A solve's `OPTIMAL`/`FEASIBLE` status describes the *objective value* it found, not one canonical lineup. When several different assignments tie for that same best score — which is common on any real roster, since players who look interchangeable rarely produce a mathematically unique optimum — CP-SAT is free to return any one of them. Re-running the exact same, unchanged scenario can therefore produce different lines from one solve to the next. That's expected, not a bug: it doesn't mean either result is wrong, just that more than one arrangement was equally good.
 
 Quick start (macOS, using provided venv at `./venv`):
 

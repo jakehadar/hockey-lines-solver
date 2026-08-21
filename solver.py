@@ -185,13 +185,20 @@ def solve_lines(players: List[Player], num_forwards_requested: int, num_defense_
         model.Add(sum(x[(p.id, s_name)] for s_name, _ in slots) <= 1)
 
     # optional_position_override: restrict this player to exactly one position,
-    # overriding preferred/secondary/unwilling entirely.
+    # overriding preferred/secondary/unwilling entirely, and force them into
+    # that slot rather than leaving them benchable - available beats override,
+    # so a benched/unavailable player stays out even with one set, but an
+    # available overridden player must be seated, surfacing infeasibility
+    # honestly (e.g. more overrides at a position than slots for it) rather
+    # than silently dropping the override to make the roster fit.
     # unwilling_positions: hard-forbid these positions (skipped if overridden).
     for p in players:
         if p.position_override:
             for s_name, s_pos in slots:
                 if s_pos != p.position_override:
                     model.Add(x[(p.id, s_name)] == 0)
+            if p.available:
+                model.Add(sum(x[(p.id, s_name)] for s_name, _ in slots) == 1)
         elif p.unwilling:
             for s_name, s_pos in slots:
                 if s_pos in p.unwilling:
