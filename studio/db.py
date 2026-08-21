@@ -86,7 +86,7 @@ def list_rosters(workspace_id: int, db_path: Path | None = None) -> List[sqlite3
     with get_connection(db_path) as conn:
         return conn.execute(
             "SELECT r.id, r.title, r.created_at, "
-            "(SELECT COUNT(*) FROM scenarios s WHERE s.roster_id = r.id AND s.is_baseline = 0) AS scenario_count "
+            "(SELECT COUNT(*) FROM scenarios s WHERE s.roster_id = r.id) AS scenario_count "
             "FROM rosters r WHERE r.workspace_id = ? ORDER BY r.created_at DESC",
             (workspace_id,),
         ).fetchall()
@@ -95,9 +95,14 @@ def list_rosters(workspace_id: int, db_path: Path | None = None) -> List[sqlite3
 def get_roster(roster_id: int, workspace_id: int, db_path: Path | None = None) -> sqlite3.Row | None:
     with get_connection(db_path) as conn:
         return conn.execute(
-            "SELECT id, title, created_at FROM rosters WHERE id = ? AND workspace_id = ?",
+            "SELECT id, title, created_at, last_mode FROM rosters WHERE id = ? AND workspace_id = ?",
             (roster_id, workspace_id),
         ).fetchone()
+
+
+def set_roster_mode(roster_id: int, mode: str, db_path: Path | None = None) -> None:
+    with get_connection(db_path) as conn:
+        conn.execute("UPDATE rosters SET last_mode = ? WHERE id = ?", (mode, roster_id))
 
 
 def delete_roster(roster_id: int, workspace_id: int, db_path: Path | None = None) -> None:
@@ -181,36 +186,6 @@ def save_as_new_roster(
 # far as this module is concerned; studio/app.py owns their shape.
 
 
-def upsert_baseline_scenario(
-    roster_id: int,
-    forwards: int,
-    defense: int,
-    time_limit: int,
-    players_json: str,
-    result_json: str,
-    db_path: Path | None = None,
-) -> int:
-    """Keep the roster's one is_baseline=1 scenario in sync with what "Save
-    to roster" just persisted, creating it on first save."""
-    with get_connection(db_path) as conn:
-        existing = conn.execute(
-            "SELECT id FROM scenarios WHERE roster_id = ? AND is_baseline = 1", (roster_id,)
-        ).fetchone()
-        if existing is not None:
-            conn.execute(
-                "UPDATE scenarios SET forwards = ?, defense = ?, time_limit = ?, "
-                "players_json = ?, result_json = ?, created_at = datetime('now') WHERE id = ?",
-                (forwards, defense, time_limit, players_json, result_json, existing["id"]),
-            )
-            return existing["id"]
-        cur = conn.execute(
-            "INSERT INTO scenarios (roster_id, title, is_baseline, forwards, defense, time_limit, "
-            "players_json, result_json) VALUES (?, 'Baseline', 1, ?, ?, ?, ?, ?)",
-            (roster_id, forwards, defense, time_limit, players_json, result_json),
-        )
-        return cur.lastrowid
-
-
 def create_scenario(
     roster_id: int,
     title: str,
@@ -220,22 +195,43 @@ def create_scenario(
     time_limit: int,
     players_json: str,
     result_json: str,
+    parent_scenario_id: int | None = None,
     db_path: Path | None = None,
 ) -> int:
     with get_connection(db_path) as conn:
         cur = conn.execute(
-            "INSERT INTO scenarios (roster_id, title, description, forwards, defense, time_limit, "
-            "players_json, result_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (roster_id, title, description, forwards, defense, time_limit, players_json, result_json),
+            "INSERT INTO scenarios (roster_id, parent_scenario_id, title, description, forwards, defense, "
+            "time_limit, players_json, result_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (roster_id, parent_scenario_id, title, description, forwards, defense, time_limit, players_json, result_json),
         )
         return cur.lastrowid
+
+
+def replace_scenario(
+    scenario_id: int,
+    forwards: int,
+    defense: int,
+    time_limit: int,
+    players_json: str,
+    result_json: str,
+    db_path: Path | None = None,
+) -> None:
+    """Overwrite an already-loaded scenario in place (Save scenario, not Branch)."""
+    with get_connection(db_path) as conn:
+        conn.execute(
+            "UPDATE scenarios SET forwards = ?, defense = ?, time_limit = ?, players_json = ?, "
+            "result_json = ?, created_at = datetime('now') WHERE id = ?",
+            (forwards, defense, time_limit, players_json, result_json, scenario_id),
+        )
 
 
 def list_scenarios(roster_id: int, db_path: Path | None = None) -> List[sqlite3.Row]:
     with get_connection(db_path) as conn:
         return conn.execute(
-            "SELECT id, title, description, created_at, is_baseline, forwards, defense, time_limit, "
-            "algo_version FROM scenarios WHERE roster_id = ? ORDER BY is_baseline DESC, created_at DESC",
+            "SELECT s.id, s.title, s.description, s.created_at, s.parent_scenario_id, s.forwards, "
+            "s.defense, s.time_limit, s.algo_version, p.title AS parent_title "
+            "FROM scenarios s LEFT JOIN scenarios p ON p.id = s.parent_scenario_id "
+            "WHERE s.roster_id = ? ORDER BY s.created_at DESC",
             (roster_id,),
         ).fetchall()
 
@@ -243,17 +239,12 @@ def list_scenarios(roster_id: int, db_path: Path | None = None) -> List[sqlite3.
 def get_scenario(scenario_id: int, roster_id: int, db_path: Path | None = None) -> sqlite3.Row | None:
     with get_connection(db_path) as conn:
         return conn.execute(
-            "SELECT id, title, description, created_at, is_baseline, forwards, defense, time_limit, "
+            "SELECT id, title, description, created_at, parent_scenario_id, forwards, defense, time_limit, "
             "algo_version, players_json, result_json FROM scenarios WHERE id = ? AND roster_id = ?",
             (scenario_id, roster_id),
         ).fetchone()
 
 
 def delete_scenario(scenario_id: int, roster_id: int, db_path: Path | None = None) -> None:
-    # is_baseline = 0 guard: the baseline row isn't user-deletable, it's
-    # kept in sync by Save and only ever goes away with its roster.
     with get_connection(db_path) as conn:
-        conn.execute(
-            "DELETE FROM scenarios WHERE id = ? AND roster_id = ? AND is_baseline = 0",
-            (scenario_id, roster_id),
-        )
+        conn.execute("DELETE FROM scenarios WHERE id = ? AND roster_id = ?", (scenario_id, roster_id))
