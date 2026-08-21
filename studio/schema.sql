@@ -24,7 +24,6 @@ CREATE TABLE IF NOT EXISTS players (
     roster_id INTEGER NOT NULL REFERENCES rosters(id) ON DELETE CASCADE,
     player_key TEXT NOT NULL,
     name TEXT NOT NULL,
-    available INTEGER NOT NULL DEFAULT 1,
     experience INTEGER NOT NULL,
     preferred_positions TEXT NOT NULL DEFAULT '',
     secondary_positions TEXT NOT NULL DEFAULT '',
@@ -34,21 +33,20 @@ CREATE TABLE IF NOT EXISTS players (
 CREATE INDEX IF NOT EXISTS idx_players_roster_id ON players(roster_id);
 
 -- A scenario is an immutable snapshot: a roster's players + solve settings
--- at some point in time, plus the solve result that snapshot produced. It's
--- never edited in place - if you want to iterate, go back to the roster,
--- change it, and save a new scenario.
---
--- Every roster always has at most one is_baseline=1 scenario, kept in sync
--- by "Save to roster": it represents the roster's own current persisted
--- state as just another scenario, so a comparison view never needs to
--- special-case "the roster itself" vs. "a named scenario."
+-- at some point in time, plus the solve result that snapshot produced.
+-- Scenarios are never edited in place - "saving" a loaded scenario replaces
+-- its own row, but changing course creates a new one (a "branch") via
+-- parent_scenario_id, which points at the scenario it was branched from.
+-- A scenario created with nothing loaded (not a branch of anything) has a
+-- null parent; roster_id alone is enough to list a roster's scenarios, so
+-- there's no need for a special "baseline" scenario to anchor them to.
 CREATE TABLE IF NOT EXISTS scenarios (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     roster_id INTEGER NOT NULL REFERENCES rosters(id) ON DELETE CASCADE,
+    parent_scenario_id INTEGER REFERENCES scenarios(id) ON DELETE SET NULL,
     title TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    is_baseline INTEGER NOT NULL DEFAULT 0,
     forwards INTEGER NOT NULL,
     defense INTEGER NOT NULL,
     time_limit INTEGER NOT NULL,
@@ -62,5 +60,4 @@ CREATE TABLE IF NOT EXISTS scenarios (
 );
 
 CREATE INDEX IF NOT EXISTS idx_scenarios_roster_id ON scenarios(roster_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_scenarios_one_baseline_per_roster
-    ON scenarios(roster_id) WHERE is_baseline = 1;
+CREATE INDEX IF NOT EXISTS idx_scenarios_parent_scenario_id ON scenarios(parent_scenario_id);

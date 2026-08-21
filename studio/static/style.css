@@ -211,7 +211,13 @@ button:disabled, button:disabled:hover { opacity: 0.45; cursor: not-allowed; bor
 .scenarios-link { color: var(--muted); text-decoration: none; font-size: 0.85rem; padding: 0.45rem 0.2rem; }
 .scenarios-link:hover { color: var(--accent); }
 
-dialog#scenario-dialog {
+.mode-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; padding: 0.15rem; gap: 0.15rem; }
+.mode-toggle-btn { border: none; background: transparent; border-radius: 999px; padding: 0.35rem 0.9rem; font-size: 0.85rem; font-weight: 600; color: var(--muted); }
+.mode-toggle-btn:hover { color: var(--text); border-color: transparent; }
+.mode-toggle-btn[aria-selected="true"] { background: var(--accent); color: #fff; }
+.mode-toggle-btn[aria-selected="true"]:hover { color: #fff; }
+
+dialog#scenario-dialog, dialog#unsaved-dialog {
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 1.25rem;
@@ -220,8 +226,9 @@ dialog#scenario-dialog {
   color: var(--text);
   background: var(--panel);
 }
-dialog#scenario-dialog::backdrop { background: rgba(15, 18, 26, 0.35); }
-dialog#scenario-dialog h2 { margin: 0 0 1rem; font-size: 1.05rem; }
+dialog#scenario-dialog::backdrop, dialog#unsaved-dialog::backdrop { background: rgba(15, 18, 26, 0.35); }
+dialog#scenario-dialog h2, dialog#unsaved-dialog h2 { margin: 0 0 1rem; font-size: 1.05rem; }
+#unsaved-dialog-body { margin: 0 0 1.25rem; font-size: 0.9rem; color: var(--muted); line-height: 1.5; }
 .dialog-field { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.75rem; }
 .dialog-field input[type="text"] { padding: 0.5rem 0.6rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.95rem; color: var(--text); }
 .scenario-description-details { margin-bottom: 1rem; font-size: 0.85rem; }
@@ -280,8 +287,23 @@ dialog#scenario-dialog h2 { margin: 0 0 1rem; font-size: 1.05rem; }
 
 .badge { display: inline-block; font-size: 0.7rem; font-weight: 700; padding: 0.1rem 0.4rem; border-radius: 999px; background: var(--accent-weak); color: var(--accent); }
 .badge.alt { background: #fff2cc; color: #8a6d00; }
-.badge.scenario { background: #fff2cc; color: #8a6d00; text-transform: uppercase; letter-spacing: 0.03em; }
 .loaded-scenario-note { font-size: 0.8rem; color: var(--muted); }
+.branched-from { color: var(--muted); font-weight: 400; }
+
+/* Roster mode: no ephemeral fields, no solver */
+#studio-root.mode-roster .col-ephemeral,
+#studio-root.mode-roster #solve-settings,
+#studio-root.mode-roster #auto-solve-label,
+#studio-root.mode-roster #solve-now-btn,
+#studio-root.mode-roster .results-panel {
+  display: none;
+}
+#studio-root.mode-roster .studio-layout { grid-template-columns: 1fr; }
+
+/* Scenario mode: roster-derived rows keep their name (readonly input) and
+   have no delete button (not rendered at all) - toggling "available" off is
+   the exclude mechanism instead. */
+.roster-table tr.locked-row td[data-col="name"] input { background: var(--bg); color: var(--muted); }
 .badge.status-primary { background: var(--ok-weak); color: var(--ok); }
 .badge.status-secondary { background: var(--accent-weak); color: var(--accent); }
 .badge.status-oop { background: var(--danger-weak); color: var(--danger); }

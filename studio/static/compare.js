@@ -67,10 +67,10 @@
       return (
         '<div class="compare-column">' +
         '<div class="compare-column-header">' +
-        '<h2>' + escapeHtml(sc.title) + (sc.is_baseline ? ' <span class="badge scenario">Baseline</span>' : '') + '</h2>' +
+        '<h2>' + escapeHtml(sc.title) + '</h2>' +
         (sc.description ? '<p class="compare-description">' + escapeHtml(sc.description) + '</p>' : '') +
         '<p class="compare-settings">Forwards ' + sc.forwards + ' &middot; Defense ' + sc.defense + '</p>' +
-        (sc.load_url ? '<a class="compare-load-link" href="' + sc.load_url + '">Load into editor&hellip;</a>' : '') +
+        '<a class="compare-load-link" href="' + sc.load_url + '">Load into editor&hellip;</a>' +
         '</div>' +
         renderResult(sc.result) +
         '</div>'

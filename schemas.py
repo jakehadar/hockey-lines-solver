@@ -92,17 +92,21 @@ class SolveResponse(BaseModel):
     defense_pairs: List[DefensePair] = Field(..., description="Defense pair assignments, in pair order.")
 
 
-class RosterSave(SolveRequest):
-    """Studio's Save (to roster): the client already solved this exact
-    players+settings snapshot, so it sends the result along rather than
-    having the server re-solve just to cache it."""
+class ScenarioUpdate(SolveRequest):
+    """Overwriting an already-loaded scenario in place: same shape as a
+    fresh scenario save, minus title/description/parent, which don't
+    change when you're just updating the snapshot itself."""
 
     result: SolveResponse = Field(..., description="The solve result this exact snapshot produced.")
 
 
-class ScenarioSave(RosterSave):
-    """Studio's Save as scenario: a named, described snapshot alongside its
-    cached result, independent of the roster's own saved baseline."""
+class ScenarioSave(ScenarioUpdate):
+    """Studio's Save/Branch scenario: a named, described snapshot alongside
+    its already-computed result, so the server never needs to re-solve just
+    to cache it."""
 
     title: str = Field(..., min_length=1, description="Scenario name.")
     description: str = Field("", description="Optional freeform notes.")
+    parent_scenario_id: Optional[int] = Field(
+        None, description="Scenario this one was branched from, if any. Null for a scenario started fresh."
+    )

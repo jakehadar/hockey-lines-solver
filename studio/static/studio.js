@@ -5,21 +5,87 @@
   const POSITIONS = window.POSITIONS;
   const STUDIO_BASE = "/w/" + window.WORKSPACE_TOKEN + "/studio/" + ROSTER_ID;
 
-  const loadedScenario = window.LOADED_SCENARIO || null;
+  const root = document.getElementById("studio-root");
+  const serverLoadedScenario = window.LOADED_SCENARIO || null;
 
-  // baseline always tracks the roster's own saved players, never a loaded
-  // scenario's - so loading a scenario naturally lands in scenario mode
-  // (players != baseline) with Reset as the way back to what's actually saved.
-  let baseline = JSON.parse(JSON.stringify(window.INITIAL_ROSTER));
-  let players = loadedScenario ? JSON.parse(JSON.stringify(loadedScenario.players)) : JSON.parse(JSON.stringify(window.INITIAL_ROSTER));
-  let lastResult = null;
+  // Editor mode and auto-solve are per-browser preferences, not roster data -
+  // localStorage, not the server, so they never clash across different
+  // browsers sharing the same workspace link. Wrapped in try/catch since
+  // storage access can throw (private browsing, blocked site data, etc.).
+  const MODE_STORAGE_KEY = "studio.lastMode." + ROSTER_ID;
+  const AUTO_SOLVE_STORAGE_KEY = "studio.autoSolve";
+
+  function loadStoredMode() {
+    try {
+      const stored = localStorage.getItem(MODE_STORAGE_KEY);
+      return stored === "roster" || stored === "scenario" ? stored : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function storeMode(newMode) {
+    try {
+      localStorage.setItem(MODE_STORAGE_KEY, newMode);
+    } catch (e) {
+      // Best-effort - losing the remembered mode just means next visit
+      // falls back to the default, which is a fine outcome.
+    }
+  }
+
+  function loadStoredAutoSolve() {
+    try {
+      const stored = localStorage.getItem(AUTO_SOLVE_STORAGE_KEY);
+      return stored === null ? true : stored === "1";
+    } catch (e) {
+      return true;
+    }
+  }
+
+  function storeAutoSolve(enabled) {
+    try {
+      localStorage.setItem(AUTO_SOLVE_STORAGE_KEY, enabled ? "1" : "0");
+    } catch (e) {
+      // Best-effort, same as storeMode.
+    }
+  }
+
+  // rosterBaseline is the roster's own saved players - the only baseline
+  // Roster mode ever compares against, and what Reset always falls back to.
+  let rosterBaseline = JSON.parse(JSON.stringify(window.INITIAL_ROSTER));
+
+  // scenarioOrigin is what "clean" means in Scenario mode: the loaded
+  // scenario's snapshot, or the roster baseline if nothing's loaded (a
+  // fresh scenario session starts from the current roster). Switching INTO
+  // Scenario mode always resets `players` to this, never carries over
+  // unsaved edits from a previous visit to the mode.
+  let loadedScenario = serverLoadedScenario ? { id: serverLoadedScenario.id, title: serverLoadedScenario.title } : null;
+  let scenarioOrigin = serverLoadedScenario
+    ? JSON.parse(JSON.stringify(serverLoadedScenario.players))
+    : JSON.parse(JSON.stringify(rosterBaseline));
+  // The settings/result that go with scenarioOrigin, so re-entering Scenario
+  // mode with the same scenario still loaded can restore them instead of
+  // re-solving something unchanged. Null whenever there's nothing cached for
+  // the current origin (nothing loaded, or unloaded via Reset).
+  let scenarioOriginMeta = serverLoadedScenario
+    ? { forwards: serverLoadedScenario.forwards, defense: serverLoadedScenario.defense, time_limit: serverLoadedScenario.time_limit, result: serverLoadedScenario.result }
+    : null;
+
+  // Loading a scenario only ever makes sense in Scenario mode, full stop -
+  // otherwise fall back to whatever this browser last had this roster in,
+  // or Roster mode if nothing's stored (a plain roster link's natural
+  // starting point, since there's nothing to solve yet on a brand-new one).
+  let mode = serverLoadedScenario ? "scenario" : loadStoredMode() || "roster";
+  let players = JSON.parse(JSON.stringify(mode === "roster" ? rosterBaseline : scenarioOrigin));
+  let lastResult = serverLoadedScenario ? serverLoadedScenario.result : null;
   let debounceTimer = null;
   // True whenever lastResult may not reflect the players/settings currently
   // on screen - from the moment a solve is kicked off until it resolves.
   // Doesn't cover the ~400ms debounce window before a solve starts; that
   // residual gap is accepted as a tradeoff for keeping this simple.
-  let resultPending = true;
+  let resultPending = !serverLoadedScenario;
   let scenarioTitles = (window.EXISTING_SCENARIO_TITLES || []).slice();
+  let pendingModeSwitch = null;
 
   const tbody = document.getElementById("roster-tbody");
   const gridEl = document.getElementById("grid");
@@ -28,27 +94,52 @@
   const autoToggle = document.getElementById("auto-solve-toggle");
   const titleInput = document.getElementById("roster-title");
   const resetBtn = document.getElementById("reset-btn");
-  const scenarioBadge = document.getElementById("scenario-badge");
+  const loadedScenarioNote = document.getElementById("loaded-scenario-note");
+  const loadedScenarioTitleEl = document.getElementById("loaded-scenario-title");
+  const modeToggle = document.getElementById("mode-toggle");
+  const saveBtn = document.getElementById("save-btn");
   const saveMenu = document.getElementById("save-menu");
   const saveMenuToggle = document.getElementById("save-menu-toggle");
-  const saveScenarioBtn = document.getElementById("save-scenario-btn");
+  const saveAltBtn = document.getElementById("save-alt-btn");
   const scenarioDialog = document.getElementById("scenario-dialog");
+  const scenarioDialogTitle = document.getElementById("scenario-dialog-title");
   const scenarioForm = document.getElementById("scenario-form");
   const scenarioTitleInput = document.getElementById("scenario-title");
   const scenarioDescriptionInput = document.getElementById("scenario-description");
+  const scenarioSubmitBtn = document.getElementById("scenario-submit-btn");
+  const unsavedDialog = document.getElementById("unsaved-dialog");
+  const unsavedDialogBody = document.getElementById("unsaved-dialog-body");
+
+  function currentOrigin() {
+    return mode === "roster" ? rosterBaseline : scenarioOrigin;
+  }
 
   function isDirty() {
-    return JSON.stringify(players) !== JSON.stringify(baseline);
+    return JSON.stringify(players) !== JSON.stringify(currentOrigin());
+  }
+
+  function isRosterPlayer(player) {
+    return rosterBaseline.some((p) => p.id === player.id);
   }
 
   function updateDirtyState() {
-    const dirty = isDirty();
-    resetBtn.disabled = !dirty;
-    scenarioBadge.hidden = !dirty;
+    resetBtn.disabled = !isDirty();
   }
 
-  function updateSaveScenarioAvailability() {
-    saveScenarioBtn.disabled = resultPending;
+  function updateSaveButtonState() {
+    const disabled = mode === "scenario" && resultPending;
+    saveBtn.disabled = disabled;
+    saveAltBtn.disabled = disabled;
+  }
+
+  function updateSaveButtonLabels() {
+    if (mode === "roster") {
+      saveBtn.textContent = "Save roster";
+      saveAltBtn.textContent = "Save roster as…";
+    } else {
+      saveBtn.textContent = "Save scenario";
+      saveAltBtn.textContent = "Branch scenario…";
+    }
   }
 
   function currentSettings() {
@@ -118,6 +209,7 @@
     tbody.innerHTML = players
       .map((p, idx) => {
         const alt = isAlt(p);
+        const locked = mode === "scenario" && isRosterPlayer(p);
         const overrideOptions = [["", "none"]].concat(POSITIONS.map((pos) => [pos, pos]));
         const linkOptions = [["", "none"]].concat(
           players.filter((o) => o.id !== p.id).map((o) => [o.id, o.name || o.id])
@@ -126,18 +218,19 @@
           '<tr data-idx="' +
           idx +
           '" class="' +
-          (alt ? "alt-row" : "") +
+          (alt ? "alt-row " : "") +
+          (locked ? "locked-row" : "") +
           '">' +
           '<td>' + (alt ? '<span class="badge alt">ALT</span>' : '<span class="badge">P</span>') + "</td>" +
-          '<td><input type="text" data-field="name" value="' + (p.name || "") + '"></td>' +
+          '<td data-col="name"><input type="text" data-field="name" value="' + (p.name || "") + '"' + (locked ? " readonly" : "") + "></td>" +
           '<td><input type="number" min="1" max="5" data-field="experience" value="' + p.experience + '" style="width:3.5em"></td>' +
-          '<td><input type="checkbox" data-field="available" ' + (p.available ? "checked" : "") + "></td>" +
+          '<td class="col-ephemeral"><input type="checkbox" data-field="available" ' + (p.available ? "checked" : "") + "></td>" +
           '<td class="chips">' + positionChips(p, "preferred_positions") + "</td>" +
           '<td class="chips">' + positionChips(p, "secondary_positions") + "</td>" +
           '<td class="chips">' + positionChips(p, "unwilling_positions") + "</td>" +
-          '<td><select data-field="optional_position_override">' + selectOptions(overrideOptions, p.optional_position_override) + "</select></td>" +
-          '<td><select data-field="optional_player_link">' + selectOptions(linkOptions, p.optional_player_link) + "</select></td>" +
-          '<td><button type="button" data-action="delete" title="Remove">&times;</button></td>' +
+          '<td class="col-ephemeral"><select data-field="optional_position_override">' + selectOptions(overrideOptions, p.optional_position_override) + "</select></td>" +
+          '<td class="col-ephemeral"><select data-field="optional_player_link">' + selectOptions(linkOptions, p.optional_player_link) + "</select></td>" +
+          '<td data-col="remove">' + (locked ? "" : '<button type="button" data-action="delete" title="Remove">&times;</button>') + "</td>" +
           "</tr>"
         );
       })
@@ -199,7 +292,7 @@
   }
 
   function renderBanner() {
-    if (!lastResult) {
+    if (mode === "roster" || !lastResult) {
       bannerEl.hidden = true;
       return;
     }
@@ -218,17 +311,18 @@
     renderGrid();
     renderBanner();
     updateDirtyState();
+    updateSaveButtonState();
   }
 
   function scheduleSolve() {
-    if (!autoToggle.checked) return;
+    if (mode !== "scenario" || !autoToggle.checked) return;
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(doSolve, 400);
   }
 
   async function doSolve() {
     resultPending = true;
-    updateSaveScenarioAvailability();
+    updateSaveButtonState();
     const settings = currentSettings();
     const resp = await fetch(STUDIO_BASE + "/solve", {
       method: "POST",
@@ -237,7 +331,7 @@
     });
     lastResult = resp.ok ? await resp.json() : { status: "NO_SOLUTION" };
     resultPending = false;
-    updateSaveScenarioAvailability();
+    updateSaveButtonState();
     renderGrid();
     renderBanner();
   }
@@ -316,30 +410,79 @@
     scheduleSolve();
   });
 
-  document.getElementById("reset-btn").addEventListener("click", () => {
-    players = JSON.parse(JSON.stringify(baseline));
-    render();
-    scheduleAutoOrManualReset();
-  });
-
-  function scheduleAutoOrManualReset() {
-    // Always re-solve after a reset so the grid reflects the restored baseline,
-    // regardless of the auto-solve toggle.
-    doSolve();
+  function doReset() {
+    if (mode === "scenario") {
+      loadedScenario = null;
+      scenarioOrigin = JSON.parse(JSON.stringify(rosterBaseline));
+      scenarioOriginMeta = null;
+      loadedScenarioNote.hidden = true;
+      updateSaveButtonLabels();
+    }
+    players = JSON.parse(JSON.stringify(rosterBaseline));
+    if (mode === "roster") {
+      lastResult = null;
+      render();
+    } else {
+      render();
+      doSolve(); // always re-solve after a reset, regardless of the auto-solve toggle
+    }
   }
 
+  resetBtn.addEventListener("click", doReset);
   document.getElementById("solve-now-btn").addEventListener("click", doSolve);
 
+  autoToggle.checked = loadStoredAutoSolve();
+
   autoToggle.addEventListener("change", () => {
+    storeAutoSolve(autoToggle.checked);
     if (autoToggle.checked) scheduleSolve();
   });
 
-  document.getElementById("save-btn").addEventListener("click", async () => {
+  // --- Roster mode saves ---------------------------------------------
+
+  async function saveRoster() {
     if (isDirty() && !confirm("Save will replace the saved roster with the version shown here. Continue?")) {
-      return;
+      return false;
+    }
+    const resp = await fetch(STUDIO_BASE + "/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ players: players }),
+    });
+    if (!resp.ok) {
+      alert("Save failed.");
+      return false;
+    }
+    rosterBaseline = JSON.parse(JSON.stringify(players));
+    if (!loadedScenario) scenarioOrigin = JSON.parse(JSON.stringify(rosterBaseline));
+    updateDirtyState();
+    return true;
+  }
+
+  async function saveRosterAs() {
+    const title = prompt("Title for the new roster:", titleInput.value + " (copy)");
+    if (!title) return;
+    const resp = await fetch(STUDIO_BASE + "/save-as", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: title, players: players }),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      window.location = "/w/" + window.WORKSPACE_TOKEN + "/studio/" + data.roster_id;
+    } else {
+      alert("Save As failed.");
+    }
+  }
+
+  // --- Scenario mode saves ---------------------------------------------
+
+  async function overwriteLoadedScenario() {
+    if (isDirty() && !confirm('Save will replace scenario "' + loadedScenario.title + '" with the version shown here. Continue?')) {
+      return false;
     }
     const settings = currentSettings();
-    const resp = await fetch(STUDIO_BASE + "/save", {
+    const resp = await fetch(STUDIO_BASE + "/scenarios/" + loadedScenario.id + "/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -350,11 +493,81 @@
         result: lastResult,
       }),
     });
+    if (!resp.ok) {
+      alert("Save scenario failed.");
+      return false;
+    }
+    scenarioOrigin = JSON.parse(JSON.stringify(players));
+    scenarioOriginMeta = { forwards: settings.forwards, defense: settings.defense, time_limit: settings.time_limit, result: lastResult };
+    updateDirtyState();
+    return true;
+  }
+
+  function openScenarioDialog(isBranch) {
+    scenarioDialogTitle.textContent = isBranch ? "Branch scenario" : "Save as scenario";
+    scenarioSubmitBtn.textContent = isBranch ? "Branch scenario" : "Save scenario";
+    scenarioTitleInput.value = nextScenarioTitle();
+    scenarioDescriptionInput.value = "";
+    scenarioDialog.showModal();
+    scenarioTitleInput.focus();
+    scenarioTitleInput.select();
+  }
+
+  document.getElementById("scenario-cancel-btn").addEventListener("click", () => {
+    pendingModeSwitch = null;
+    scenarioDialog.close();
+  });
+
+  scenarioForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const title = scenarioTitleInput.value.trim();
+    if (!title) return;
+    const settings = currentSettings();
+    const resp = await fetch(STUDIO_BASE + "/scenarios", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: title,
+        description: scenarioDescriptionInput.value.trim(),
+        players: players,
+        forwards: settings.forwards,
+        defense: settings.defense,
+        time_limit: settings.time_limit,
+        result: lastResult,
+        parent_scenario_id: loadedScenario ? loadedScenario.id : null,
+      }),
+    });
     if (resp.ok) {
-      baseline = JSON.parse(JSON.stringify(players));
+      const data = await resp.json();
+      scenarioTitles.push(title);
+      loadedScenario = { id: data.scenario_id, title: title };
+      scenarioOrigin = JSON.parse(JSON.stringify(players));
+      scenarioOriginMeta = { forwards: settings.forwards, defense: settings.defense, time_limit: settings.time_limit, result: lastResult };
+      loadedScenarioTitleEl.textContent = title;
+      loadedScenarioNote.hidden = false;
+      updateSaveButtonLabels();
       updateDirtyState();
+      scenarioDialog.close();
+      if (pendingModeSwitch) {
+        const target = pendingModeSwitch;
+        pendingModeSwitch = null;
+        enterMode(target);
+      }
     } else {
-      alert("Save failed.");
+      alert("Save scenario failed.");
+    }
+  });
+
+  // --- Primary/alt Save button, context-sensitive by mode --------------
+
+  saveBtn.addEventListener("click", () => {
+    if (saveBtn.disabled) return;
+    if (mode === "roster") {
+      saveRoster();
+    } else if (loadedScenario) {
+      overwriteLoadedScenario();
+    } else {
+      openScenarioDialog(false);
     }
   });
 
@@ -380,73 +593,99 @@
     if (e.key === "Escape") closeSaveMenu();
   });
 
-  document.getElementById("save-as-roster-btn").addEventListener("click", async () => {
+  saveAltBtn.addEventListener("click", () => {
     closeSaveMenu();
-    const title = prompt("Title for the new roster:", titleInput.value + " (copy)");
-    if (!title) return;
-    const resp = await fetch(STUDIO_BASE + "/save-as", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: title, players: players }),
-    });
-    if (resp.ok) {
-      const data = await resp.json();
-      window.location = "/w/" + window.WORKSPACE_TOKEN + "/studio/" + data.roster_id;
+    if (saveAltBtn.disabled) return;
+    if (mode === "roster") {
+      saveRosterAs();
     } else {
-      alert("Save As failed.");
+      openScenarioDialog(true);
     }
   });
 
-  saveScenarioBtn.addEventListener("click", () => {
-    closeSaveMenu();
-    if (saveScenarioBtn.disabled) return;
-    scenarioTitleInput.value = nextScenarioTitle();
-    scenarioDescriptionInput.value = "";
-    scenarioDialog.showModal();
-    scenarioTitleInput.focus();
-    scenarioTitleInput.select();
-  });
+  // --- Mode switching ----------------------------------------------------
 
-  document.getElementById("scenario-cancel-btn").addEventListener("click", () => scenarioDialog.close());
-
-  scenarioForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const title = scenarioTitleInput.value.trim();
-    if (!title) return;
-    const settings = currentSettings();
-    const resp = await fetch(STUDIO_BASE + "/scenarios", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: title,
-        description: scenarioDescriptionInput.value.trim(),
-        players: players,
-        forwards: settings.forwards,
-        defense: settings.defense,
-        time_limit: settings.time_limit,
-        result: lastResult,
-      }),
-    });
-    if (resp.ok) {
-      scenarioTitles.push(title);
-      scenarioDialog.close();
-    } else {
-      alert("Save scenario failed.");
+  function applyModeUI() {
+    root.classList.toggle("mode-roster", mode === "roster");
+    root.classList.toggle("mode-scenario", mode === "scenario");
+    for (const btn of modeToggle.querySelectorAll(".mode-toggle-btn")) {
+      btn.setAttribute("aria-selected", btn.dataset.mode === mode ? "true" : "false");
     }
-  });
-
-  if (loadedScenario) {
-    // Settings and the cached result came from the same snapshot as
-    // `players`, so there's nothing to re-solve - render it as-is.
-    document.getElementById("setting-forwards").value = loadedScenario.forwards;
-    document.getElementById("setting-defense").value = loadedScenario.defense;
-    document.getElementById("setting-time-limit").value = loadedScenario.time_limit;
-    lastResult = loadedScenario.result;
-    resultPending = false;
-    render();
-    updateSaveScenarioAvailability();
-  } else {
-    render();
-    doSolve();
+    loadedScenarioNote.hidden = !(mode === "scenario" && loadedScenario);
+    updateSaveButtonLabels();
   }
+
+  function enterMode(newMode) {
+    mode = newMode;
+    players = JSON.parse(JSON.stringify(currentOrigin()));
+    applyModeUI();
+    if (mode === "roster") {
+      lastResult = null;
+      render();
+    } else if (scenarioOriginMeta) {
+      // A scenario is loaded and its cached result still matches
+      // scenarioOrigin (nothing's touched it since) - reuse it as-is.
+      document.getElementById("setting-forwards").value = scenarioOriginMeta.forwards;
+      document.getElementById("setting-defense").value = scenarioOriginMeta.defense;
+      document.getElementById("setting-time-limit").value = scenarioOriginMeta.time_limit;
+      lastResult = scenarioOriginMeta.result;
+      resultPending = false;
+      render();
+    } else {
+      render();
+      doSolve();
+    }
+    storeMode(mode);
+  }
+
+  function requestModeSwitch(target) {
+    if (target === mode) return;
+    if (!isDirty()) {
+      enterMode(target);
+      return;
+    }
+    pendingModeSwitch = target;
+    unsavedDialogBody.textContent =
+      mode === "roster"
+        ? "You have unsaved roster changes. Save them, discard them, or stay here?"
+        : "You have unsaved scenario changes. Save them, discard them, or stay here?";
+    unsavedDialog.showModal();
+  }
+
+  modeToggle.addEventListener("click", (e) => {
+    const btn = e.target.closest(".mode-toggle-btn");
+    if (!btn) return;
+    requestModeSwitch(btn.dataset.mode);
+  });
+
+  document.getElementById("unsaved-cancel-btn").addEventListener("click", () => {
+    pendingModeSwitch = null;
+    unsavedDialog.close();
+  });
+
+  document.getElementById("unsaved-discard-btn").addEventListener("click", () => {
+    const target = pendingModeSwitch;
+    pendingModeSwitch = null;
+    unsavedDialog.close();
+    enterMode(target);
+  });
+
+  document.getElementById("unsaved-save-btn").addEventListener("click", async () => {
+    unsavedDialog.close();
+    if (mode === "scenario" && !loadedScenario) {
+      // Nothing loaded to silently overwrite - fall back to the full
+      // Save-as-scenario dialog. pendingModeSwitch stays set so the
+      // originally requested switch still happens once that's submitted.
+      openScenarioDialog(false);
+      return;
+    }
+    const target = pendingModeSwitch;
+    pendingModeSwitch = null;
+    const ok = mode === "roster" ? await saveRoster() : await overwriteLoadedScenario();
+    if (ok) enterMode(target);
+  });
+
+  // --- Initial paint ------------------------------------------------------
+
+  enterMode(mode);
 })();

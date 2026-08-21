@@ -71,17 +71,8 @@ def _fake_result(status="NO_SOLUTION"):
     }
 
 
-def _save_roster(client, token, roster_id, players, forwards=3, defense=3, time_limit=5, result=None):
-    return client.post(
-        f"/w/{token}/studio/{roster_id}/save",
-        json={
-            "players": players,
-            "forwards": forwards,
-            "defense": defense,
-            "time_limit": time_limit,
-            "result": result or _fake_result(),
-        },
-    )
+def _save_roster(client, token, roster_id, players):
+    return client.post(f"/w/{token}/studio/{roster_id}/save", json={"players": players})
 
 
 def test_new_blank_roster_has_no_players(client, studio):
@@ -124,6 +115,8 @@ def test_solve_endpoint_is_stateless(client):
 
 
 def test_save_persists_unwilling_positions_but_not_ephemeral_fields(client, studio):
+    # available, optional_position_override, and optional_player_link are all
+    # ephemeral - none of them round-trip through the roster.
     _, db_module = studio
     token, roster_id = _create_roster(client)
 
@@ -131,7 +124,7 @@ def test_save_persists_unwilling_positions_but_not_ephemeral_fields(client, stud
         {
             "id": "P1",
             "name": "Alice",
-            "available": 1,
+            "available": 0,
             "experience": 3,
             "preferred_positions": ["LW"],
             "secondary_positions": ["RW"],
@@ -146,11 +139,15 @@ def test_save_persists_unwilling_positions_but_not_ephemeral_fields(client, stud
     rows = db_module.list_players(roster_id)
     assert len(rows) == 1
     assert rows[0]["unwilling_positions"] == "C"
+    assert "available" not in rows[0].keys()  # ephemeral, never persisted to the roster
 
-    # Reloading the page hydrates from the DB, where override/link never lived.
+    # Reloading the page hydrates from the DB, where override/link/available never lived -
+    # available in particular always comes back available (1), regardless of what was
+    # sent above, since a fresh (unbranched) scenario always starts all-available.
     resp = client.get(f"/w/{token}/studio/{roster_id}")
     assert b'"optional_position_override": null' in resp.data
     assert b'"optional_player_link": null' in resp.data
+    assert b'"available": 1' in resp.data
 
 
 def test_save_as_creates_an_independent_roster(client, studio):
@@ -259,13 +256,11 @@ def test_csv_upload_creates_a_roster_with_defaults_and_generated_ids(client, stu
 
     alice = next(p for p in players if p["name"] == "Alice")
     assert alice["player_key"] == "P01"
-    assert alice["available"] == 1
     assert alice["experience"] == 1  # blank rank -> defaulted
     assert alice["preferred_positions"] == "LW;C"
 
     bob = next(p for p in players if p["name"] == "Bob")
     assert bob["player_key"] == "P02"
-    assert bob["available"] == 1  # uploads are always available, regardless of the file
     assert bob["experience"] == 4
 
 
@@ -342,29 +337,16 @@ def _create_scenario(client, token, roster_id, title="Scenario 1", description="
     )
 
 
-def test_save_upserts_a_single_baseline_scenario(client, studio):
+def test_saving_the_roster_never_creates_a_scenario(client, studio):
     _, db_module = studio
     token, roster_id = _create_roster(client)
 
     _save_roster(client, token, roster_id, SMALL_PLAYERS[:2])
-    scenarios = db_module.list_scenarios(roster_id)
-    assert len(scenarios) == 1
-    assert scenarios[0]["is_baseline"] == 1
-    assert scenarios[0]["title"] == "Baseline"
-    first_id = scenarios[0]["id"]
-
-    # Saving again updates the same baseline row rather than adding another.
-    _save_roster(client, token, roster_id, SMALL_PLAYERS, result=_fake_result("OPTIMAL"))
-    scenarios = db_module.list_scenarios(roster_id)
-    assert len(scenarios) == 1
-    assert scenarios[0]["id"] == first_id
-
-    full = db_module.get_scenario(first_id, roster_id)
-    assert len(json.loads(full["players_json"])) == 3
-    assert json.loads(full["result_json"])["status"] == "OPTIMAL"
+    _save_roster(client, token, roster_id, SMALL_PLAYERS)
+    assert db_module.list_scenarios(roster_id) == []
 
 
-def test_create_scenario_is_independent_of_the_baseline(client, studio):
+def test_create_scenario_defaults_to_no_parent(client, studio):
     _, db_module = studio
     token, roster_id = _create_roster(client)
     _save_roster(client, token, roster_id, SMALL_PLAYERS)
@@ -373,13 +355,122 @@ def test_create_scenario_is_independent_of_the_baseline(client, studio):
     assert resp.status_code == 200
     scenario_id = resp.get_json()["scenario_id"]
 
-    scenarios = {s["title"]: s for s in db_module.list_scenarios(roster_id)}
-    assert set(scenarios) == {"Baseline", "Bench Bob"}
-    assert scenarios["Bench Bob"]["is_baseline"] == 0
-    assert scenarios["Bench Bob"]["id"] == scenario_id
+    scenario = db_module.get_scenario(scenario_id, roster_id)
+    assert scenario["title"] == "Bench Bob"
+    assert scenario["parent_scenario_id"] is None
 
     # The roster's own players are untouched by saving a scenario.
     assert len(db_module.list_players(roster_id)) == 3
+
+
+def test_create_scenario_with_a_parent_branches_it(client, studio):
+    _, db_module = studio
+    token, roster_id = _create_roster(client)
+    parent_id = _create_scenario(client, token, roster_id, title="Parent").get_json()["scenario_id"]
+
+    resp = client.post(
+        f"/w/{token}/studio/{roster_id}/scenarios",
+        json={
+            "title": "Child",
+            "description": "",
+            "players": SMALL_PLAYERS,
+            "forwards": 1,
+            "defense": 1,
+            "time_limit": 5,
+            "result": _fake_result(),
+            "parent_scenario_id": parent_id,
+        },
+    )
+    assert resp.status_code == 200
+    child_id = resp.get_json()["scenario_id"]
+    assert db_module.get_scenario(child_id, roster_id)["parent_scenario_id"] == parent_id
+
+
+def test_deselecting_available_persists_through_a_branch(client, studio):
+    _, db_module = studio
+    token, roster_id = _create_roster(client)
+
+    deselected = [dict(p, available=1) for p in SMALL_PLAYERS]
+    deselected[0]["available"] = 0  # Alice benched in this scenario
+
+    parent_id = _create_scenario(client, token, roster_id, title="Parent", players=deselected).get_json()["scenario_id"]
+    parent = db_module.get_scenario(parent_id, roster_id)
+    assert json.loads(parent["players_json"])[0]["available"] == 0
+
+    # Branching carries the same players (and their available flags) forward.
+    branch_resp = client.post(
+        f"/w/{token}/studio/{roster_id}/scenarios",
+        json={
+            "title": "Branch",
+            "description": "",
+            "players": deselected,
+            "forwards": 1,
+            "defense": 1,
+            "time_limit": 5,
+            "result": _fake_result(),
+            "parent_scenario_id": parent_id,
+        },
+    )
+    branch_id = branch_resp.get_json()["scenario_id"]
+    branch = db_module.get_scenario(branch_id, roster_id)
+    assert json.loads(branch["players_json"])[0]["available"] == 0
+
+
+def test_create_scenario_rejects_a_parent_from_another_roster(client, studio):
+    token, roster_a = _create_roster(client, title="A")
+    other_scenario_id = _create_scenario(client, token, roster_a, title="A's scenario").get_json()["scenario_id"]
+    _, roster_b = _create_roster(client, title="B")
+
+    resp = client.post(
+        f"/w/{token}/studio/{roster_b}/scenarios",
+        json={
+            "title": "Child",
+            "description": "",
+            "players": SMALL_PLAYERS,
+            "forwards": 1,
+            "defense": 1,
+            "time_limit": 5,
+            "result": _fake_result(),
+            "parent_scenario_id": other_scenario_id,
+        },
+    )
+    assert resp.status_code == 400
+
+
+def test_updating_a_loaded_scenario_overwrites_it_in_place(client, studio):
+    _, db_module = studio
+    token, roster_id = _create_roster(client)
+    scenario_id = _create_scenario(client, token, roster_id, title="Original", players=SMALL_PLAYERS).get_json()["scenario_id"]
+
+    resp = client.post(
+        f"/w/{token}/studio/{roster_id}/scenarios/{scenario_id}/save",
+        json={
+            "players": SMALL_PLAYERS[:1],
+            "forwards": 2,
+            "defense": 2,
+            "time_limit": 10,
+            "result": _fake_result("OPTIMAL"),
+        },
+    )
+    assert resp.status_code == 200
+
+    scenarios = db_module.list_scenarios(roster_id)
+    assert len(scenarios) == 1  # updated in place, not a new row
+    assert scenarios[0]["id"] == scenario_id
+    assert scenarios[0]["title"] == "Original"  # title/description untouched by an update
+
+    full = db_module.get_scenario(scenario_id, roster_id)
+    assert len(json.loads(full["players_json"])) == 1
+    assert json.loads(full["result_json"])["status"] == "OPTIMAL"
+
+
+def test_updating_an_unknown_scenario_404s(client, studio):
+    token, roster_id = _create_roster(client)
+    resp = client.post(
+        f"/w/{token}/studio/{roster_id}/scenarios/999/save",
+        json={"players": SMALL_PLAYERS, "forwards": 3, "defense": 3, "time_limit": 5, "result": _fake_result()},
+    )
+    assert resp.status_code == 404
 
 
 def test_create_scenario_requires_a_title(client, studio):
@@ -388,19 +479,39 @@ def test_create_scenario_requires_a_title(client, studio):
     assert resp.status_code == 400
 
 
-def test_delete_scenario_removes_named_but_not_baseline(client, studio):
+def test_delete_scenario_removes_it(client, studio):
     _, db_module = studio
     token, roster_id = _create_roster(client)
-    _save_roster(client, token, roster_id, SMALL_PLAYERS)
     scenario_id = _create_scenario(client, token, roster_id, title="Extra").get_json()["scenario_id"]
-    baseline_id = next(s["id"] for s in db_module.list_scenarios(roster_id) if s["is_baseline"])
 
     client.post(f"/w/{token}/studio/{roster_id}/scenarios/{scenario_id}/delete")
     assert db_module.get_scenario(scenario_id, roster_id) is None
 
-    # Deleting the baseline row is a no-op - it's kept in sync by Save, not user-deletable.
-    client.post(f"/w/{token}/studio/{roster_id}/scenarios/{baseline_id}/delete")
-    assert db_module.get_scenario(baseline_id, roster_id) is not None
+
+def test_deleting_a_scenario_orphans_its_children_instead_of_cascading(client, studio):
+    _, db_module = studio
+    token, roster_id = _create_roster(client)
+    parent_id = _create_scenario(client, token, roster_id, title="Parent").get_json()["scenario_id"]
+    child_resp = client.post(
+        f"/w/{token}/studio/{roster_id}/scenarios",
+        json={
+            "title": "Child",
+            "description": "",
+            "players": SMALL_PLAYERS,
+            "forwards": 1,
+            "defense": 1,
+            "time_limit": 5,
+            "result": _fake_result(),
+            "parent_scenario_id": parent_id,
+        },
+    )
+    child_id = child_resp.get_json()["scenario_id"]
+
+    client.post(f"/w/{token}/studio/{roster_id}/scenarios/{parent_id}/delete")
+    assert db_module.get_scenario(parent_id, roster_id) is None
+    child = db_module.get_scenario(child_id, roster_id)
+    assert child is not None  # the child survives...
+    assert child["parent_scenario_id"] is None  # ...just orphaned, not deleted with its parent
 
 
 def test_deleting_a_roster_cascades_its_scenarios(client, studio):
@@ -408,7 +519,7 @@ def test_deleting_a_roster_cascades_its_scenarios(client, studio):
     token, roster_id = _create_roster(client)
     _save_roster(client, token, roster_id, SMALL_PLAYERS)
     _create_scenario(client, token, roster_id, title="Extra")
-    assert len(db_module.list_scenarios(roster_id)) == 2
+    assert len(db_module.list_scenarios(roster_id)) == 1
 
     client.post(f"/w/{token}/rosters/{roster_id}/delete")
     assert db_module.list_scenarios(roster_id) == []
@@ -425,21 +536,19 @@ def test_roster_delete_confirm_warns_about_named_scenario_count(client, studio):
 
 
 def test_compare_view_renders_selected_scenarios(client, studio):
-    _, db_module = studio
     token, roster_id = _create_roster(client)
-    _save_roster(client, token, roster_id, SMALL_PLAYERS)
     scenario_id = _create_scenario(client, token, roster_id, title="What If").get_json()["scenario_id"]
 
     resp = client.get(f"/w/{token}/studio/{roster_id}/compare?ids={scenario_id}")
     assert resp.status_code == 200
     assert b"What If" in resp.data
-    assert b"Baseline" not in resp.data  # only the requested id was included
+    assert b"Plan B" not in resp.data  # only the requested id was included
 
-    baseline_id = next(s["id"] for s in db_module.list_scenarios(roster_id) if s["is_baseline"])
-    resp = client.get(f"/w/{token}/studio/{roster_id}/compare?ids={scenario_id}&ids={baseline_id}")
+    other_id = _create_scenario(client, token, roster_id, title="Plan B").get_json()["scenario_id"]
+    resp = client.get(f"/w/{token}/studio/{roster_id}/compare?ids={scenario_id}&ids={other_id}")
     assert resp.status_code == 200
     assert b"What If" in resp.data
-    assert b"Baseline" in resp.data
+    assert b"Plan B" in resp.data
 
 
 def test_compare_view_with_no_valid_ids_errors(client, studio):
@@ -466,7 +575,7 @@ def test_loading_a_scenario_seeds_players_but_leaves_the_roster_untouched(client
     resp = client.get(f"/w/{token}/studio/{roster_id}?load_scenario={scenario_id}")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
-    assert "Loaded from scenario: Bench Bob" in body
+    assert '<span id="loaded-scenario-title">Bench Bob</span>' in body
 
     initial_roster = _extract_json_var(body, "INITIAL_ROSTER")
     loaded_scenario = _extract_json_var(body, "LOADED_SCENARIO")
@@ -479,41 +588,32 @@ def test_loading_a_scenario_seeds_players_but_leaves_the_roster_untouched(client
     assert len(db_module.list_players(roster_id)) == 3
 
 
-def test_loading_the_baseline_scenario_404s(client, studio):
-    _, db_module = studio
-    token, roster_id = _create_roster(client)
-    _save_roster(client, token, roster_id, SMALL_PLAYERS)
-    baseline_id = next(s["id"] for s in db_module.list_scenarios(roster_id) if s["is_baseline"])
-
-    resp = client.get(f"/w/{token}/studio/{roster_id}?load_scenario={baseline_id}")
-    assert resp.status_code == 404
-
-
 def test_loading_an_unknown_scenario_404s(client, studio):
     token, roster_id = _create_roster(client)
     resp = client.get(f"/w/{token}/studio/{roster_id}?load_scenario=999")
     assert resp.status_code == 404
 
 
-def test_scenarios_list_offers_load_only_for_named_scenarios(client, studio):
+def test_scenarios_list_has_a_load_link_for_every_scenario(client, studio):
     token, roster_id = _create_roster(client)
-    _save_roster(client, token, roster_id, SMALL_PLAYERS)
     scenario_id = _create_scenario(client, token, roster_id, title="Named").get_json()["scenario_id"]
 
     resp = client.get(f"/w/{token}/studio/{roster_id}/scenarios")
     body = resp.get_data(as_text=True)
     assert f"load_scenario={scenario_id}" in body
-    assert body.count("load_scenario=") == 1  # baseline row doesn't get one
 
 
-def test_compare_view_offers_load_only_for_named_scenarios(client, studio):
-    _, db_module = studio
+def test_compare_view_has_a_load_link_for_every_scenario(client, studio):
     token, roster_id = _create_roster(client)
-    _save_roster(client, token, roster_id, SMALL_PLAYERS)
     scenario_id = _create_scenario(client, token, roster_id, title="Named").get_json()["scenario_id"]
-    baseline_id = next(s["id"] for s in db_module.list_scenarios(roster_id) if s["is_baseline"])
+    other_id = _create_scenario(client, token, roster_id, title="Other").get_json()["scenario_id"]
 
-    resp = client.get(f"/w/{token}/studio/{roster_id}/compare?ids={scenario_id}&ids={baseline_id}")
+    resp = client.get(f"/w/{token}/studio/{roster_id}/compare?ids={scenario_id}&ids={other_id}")
     body = resp.get_data(as_text=True)
     assert f"load_scenario={scenario_id}" in body
-    assert body.count("load_scenario=") == 1  # baseline column doesn't get one
+    assert f"load_scenario={other_id}" in body
+
+
+# Editor mode (Roster vs Scenario) and auto-solve are per-browser preferences
+# kept in localStorage now, not server state - see studio.js. They're covered
+# by live browser checks, not here.
