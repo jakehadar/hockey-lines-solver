@@ -48,6 +48,13 @@ def test_optional_position_override_beats_prefs_and_unwilling():
     p1_positions = [pos for pid, _, pos in all_assignments(result) if pid == "P1"]
     assert p1_positions == ["C"]
 
+    # The override forced P1 onto a position it's marked unwilling to play -
+    # that must be flagged as "unwilling", not misreported as "oop"/"secondary".
+    p1_slot = next(a for fl in result.forward_lines for a in fl.slots if a.player_id == "P1")
+    assert p1_slot.status == "unwilling"
+    assert result.forward_lines[0].unwilling_count == 1
+    assert result.summary.total_unwilling == 1
+
 
 def test_optional_player_link_forces_same_forward_line():
     rows = [

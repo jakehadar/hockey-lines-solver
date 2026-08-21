@@ -300,7 +300,7 @@ def solve_lines(players: List[Player], num_forwards_requested: int, num_defense_
     if result not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return SolveResponse(
             status="NO_SOLUTION",
-            summary=SolveSummary(**summary_base, total_assigned=0, total_primary=0, total_secondary=0, total_oop=0),
+            summary=SolveSummary(**summary_base, total_assigned=0, total_primary=0, total_secondary=0, total_oop=0, total_unwilling=0),
             forward_lines=[],
             defense_pairs=[],
         )
@@ -308,7 +308,13 @@ def solve_lines(players: List[Player], num_forwards_requested: int, num_defense_
     status_name = "OPTIMAL" if result == cp_model.OPTIMAL else "FEASIBLE"
 
     def classify(pos: str, p: Player) -> str:
-        if pos in p.prefs:
+        # Checked first: unwilling is a hard constraint under normal
+        # circumstances, so a position landing here at all only happens via
+        # optional_position_override forcing it - that's worth flagging even
+        # if the position also happens to be in prefs/secondary.
+        if pos in p.unwilling:
+            return "unwilling"
+        elif pos in p.prefs:
             return "primary"
         elif pos in p.secondary:
             return "secondary"
@@ -333,9 +339,11 @@ def solve_lines(players: List[Player], num_forwards_requested: int, num_defense_
         primary_count = sum(1 for a in slot_assignments if a.status == "primary")
         secondary_count = sum(1 for a in slot_assignments if a.status == "secondary")
         oop_count = sum(1 for a in slot_assignments if a.status == "oop")
+        unwilling_count = sum(1 for a in slot_assignments if a.status == "unwilling")
         forward_lines.append(ForwardLine(
             line_number=l, slots=slot_assignments, exp_sum=exp_sum,
             primary_count=primary_count, secondary_count=secondary_count, oop_count=oop_count,
+            unwilling_count=unwilling_count,
         ))
 
     defense_pairs: List[DefensePair] = []
@@ -346,16 +354,24 @@ def solve_lines(players: List[Player], num_forwards_requested: int, num_defense_
         primary_count = sum(1 for a in slot_assignments if a.status == "primary")
         secondary_count = sum(1 for a in slot_assignments if a.status == "secondary")
         oop_count = sum(1 for a in slot_assignments if a.status == "oop")
+        unwilling_count = sum(1 for a in slot_assignments if a.status == "unwilling")
         defense_pairs.append(DefensePair(
             pair_number=d, slots=slot_assignments,
             primary_count=primary_count, secondary_count=secondary_count, oop_count=oop_count,
+            unwilling_count=unwilling_count,
             partial=partial,
         ))
 
     total_assigned = sum(1 for p in players if any(solver.Value(x[(p.id, s_name)]) == 1 for s_name, _ in slots))
-    total_primary = sum(1 for p in players for s_name, s_pos in slots if solver.Value(x[(p.id, s_name)]) == 1 and s_pos in p.prefs)
-    total_secondary = sum(1 for p in players for s_name, s_pos in slots if solver.Value(x[(p.id, s_name)]) == 1 and s_pos in p.secondary)
-    total_oop = total_assigned - total_primary - total_secondary
+    status_counts = {"primary": 0, "secondary": 0, "oop": 0, "unwilling": 0}
+    for p in players:
+        for s_name, s_pos in slots:
+            if solver.Value(x[(p.id, s_name)]) == 1:
+                status_counts[classify(s_pos, p)] += 1
+    total_primary = status_counts["primary"]
+    total_secondary = status_counts["secondary"]
+    total_oop = status_counts["oop"]
+    total_unwilling = status_counts["unwilling"]
 
     return SolveResponse(
         status=status_name,
@@ -364,6 +380,7 @@ def solve_lines(players: List[Player], num_forwards_requested: int, num_defense_
             total_assigned=total_assigned,
             total_primary=total_primary,
             total_secondary=total_secondary,
+            total_unwilling=total_unwilling,
             total_oop=total_oop,
         ),
         forward_lines=forward_lines,
@@ -389,7 +406,9 @@ def print_solve_result(result: SolveResponse) -> None:
 
     def fmt(a: SlotAssignment) -> str:
         tag = ""
-        if a.status == "secondary":
+        if a.status == "unwilling":
+            tag = "(UNWILLING!)"
+        elif a.status == "secondary":
             tag = "(secondary)"
         elif a.status == "oop":
             tag = "(OOP)"
@@ -397,16 +416,17 @@ def print_solve_result(result: SolveResponse) -> None:
 
     print(f"\nForwards: requested={s.forwards_requested} used={s.forwards_used}")
     for fl in result.forward_lines:
-        print(f"Line {fl.line_number}: {', '.join(fmt(a) for a in fl.slots)} | exp_sum={fl.exp_sum} | primary={fl.primary_count} secondary={fl.secondary_count} oop={fl.oop_count}")
+        print(f"Line {fl.line_number}: {', '.join(fmt(a) for a in fl.slots)} | exp_sum={fl.exp_sum} | primary={fl.primary_count} secondary={fl.secondary_count} oop={fl.oop_count} unwilling={fl.unwilling_count}")
 
     print(f"\nDefense: requested_pairs={s.defense_requested} pairs_used={s.defense_pairs_used} (last_partial={s.defense_last_partial})")
     for dp in result.defense_pairs:
-        print(f"Pair {dp.pair_number}: {', '.join(fmt(a) for a in dp.slots)} | primary={dp.primary_count} secondary={dp.secondary_count} oop={dp.oop_count}")
+        print(f"Pair {dp.pair_number}: {', '.join(fmt(a) for a in dp.slots)} | primary={dp.primary_count} secondary={dp.secondary_count} oop={dp.oop_count} unwilling={dp.unwilling_count}")
 
     print(f"\nTotal assigned: {s.total_assigned}")
     print(f"Primary-position assignments: {s.total_primary}")
     print(f"Secondary-position assignments: {s.total_secondary}")
     print(f"Out-of-position (OOP) assignments: {s.total_oop}")
+    print(f"Unwilling-position assignments: {s.total_unwilling}")
 
 
 def main():

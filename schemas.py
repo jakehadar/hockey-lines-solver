@@ -47,8 +47,14 @@ class SlotAssignment(BaseModel):
     player_id: str = Field(..., description="ID of the player assigned to this slot.")
     player_name: str = Field(..., description="Name of the player assigned to this slot.")
     experience: int = Field(..., description="Experience level of the assigned player.")
-    status: Literal["primary", "secondary", "oop"] = Field(
-        ..., description="Whether this slot's position is the player's primary, secondary, or out-of-position (oop) assignment."
+    status: Literal["primary", "secondary", "oop", "unwilling"] = Field(
+        ...,
+        description=(
+            "Whether this slot's position is the player's primary, secondary, out-of-position (oop), "
+            "or unwilling assignment. 'unwilling' means the position is in the player's "
+            "unwilling_positions - normally impossible, only reachable when optional_position_override "
+            "forces it despite that."
+        ),
     )
 
 
@@ -59,6 +65,7 @@ class ForwardLine(BaseModel):
     primary_count: int = Field(..., description="Number of players assigned to their primary position on this line.")
     secondary_count: int = Field(..., description="Number of players assigned to their secondary position on this line.")
     oop_count: int = Field(..., description="Number of players assigned out-of-position on this line.")
+    unwilling_count: int = Field(..., description="Number of players assigned to a position they marked unwilling to play (only possible via optional_position_override).")
 
 
 class DefensePair(BaseModel):
@@ -67,6 +74,7 @@ class DefensePair(BaseModel):
     primary_count: int = Field(..., description="Number of players assigned to their primary position on this pair.")
     secondary_count: int = Field(..., description="Number of players assigned to their secondary position on this pair.")
     oop_count: int = Field(..., description="Number of players assigned out-of-position on this pair.")
+    unwilling_count: int = Field(..., description="Number of players assigned to a position they marked unwilling to play (only possible via optional_position_override).")
     partial: bool = Field(..., description="True if this pair only has an LD (no RD partner) because players ran out.")
 
 
@@ -81,6 +89,7 @@ class SolveSummary(BaseModel):
     total_primary: int = Field(..., description="Total assignments to a player's primary position.")
     total_secondary: int = Field(..., description="Total assignments to a player's secondary position.")
     total_oop: int = Field(..., description="Total out-of-position assignments.")
+    total_unwilling: int = Field(..., description="Total assignments to a position the player marked unwilling to play (only possible via optional_position_override).")
 
 
 class SolveResponse(BaseModel):
