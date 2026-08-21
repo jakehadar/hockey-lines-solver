@@ -148,8 +148,14 @@
     return mode === "roster" ? rosterBaseline : scenarioOrigin;
   }
 
+  // Row order (sortable in the UI) isn't meaningful data - only compare by
+  // content, never by position, so sorting alone never counts as "dirty".
+  function canonicalPlayersJSON(list) {
+    return JSON.stringify([...list].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)));
+  }
+
   function isDirty() {
-    const playersDirty = JSON.stringify(players) !== JSON.stringify(currentOrigin());
+    const playersDirty = canonicalPlayersJSON(players) !== canonicalPlayersJSON(currentOrigin());
     if (mode === "roster") {
       return playersDirty || titleInput.value !== rosterTitleBaseline;
     }
