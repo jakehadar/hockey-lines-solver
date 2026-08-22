@@ -1,0 +1,19 @@
+# Render Blueprint for the solver service (solver/api.py). Render reads this
+# automatically when you connect this repo as a Blueprint; equivalently, you
+# can configure the same service by hand in the dashboard with these same
+# settings (Root Directory: solver, Build Command / Start Command below).
+#
+# Studio (the Flask frontend) is NOT defined here - it deploys to Vercel
+# separately (see studio/vercel.json), not as a Render service.
+services:
+  - type: web
+    name: hockey-lines-solver
+    runtime: python
+    plan: free
+    rootDir: solver
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    # Also the endpoint an external keep-alive pinger (UptimeRobot,
+    # cron-job.org) should hit every ~10 minutes - Render's free tier sleeps
+    # a service after 15 minutes with no traffic.
+    healthCheckPath: /health

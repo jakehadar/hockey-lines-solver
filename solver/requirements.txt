@@ -1,0 +1,9 @@
+# Pinned, not >=: 9.15.6755 segfaults inside CpModel.__init__
+# (_add_pre_pep8_methods) on this platform - verified 9.12.4544 is stable.
+# Worth retrying a floating version once ortools ships a fix upstream.
+ortools==9.12.4544
+fastapi[standard]
+uvicorn[standard]
+python-multipart>=0.0.9
+pytest>=8.0.0
+httpx>=0.27.0

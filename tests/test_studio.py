@@ -1,21 +1,67 @@
 import importlib
 import io
 import json
+import os
 import re
 
 import pytest
 
+# A local Postgres database dedicated to tests (see db.py - studio has no
+# SQLite fallback). Defaults to the "hockey_lines_test" database on whatever
+# Postgres server is already running locally; override with TEST_DATABASE_URL
+# to point at something else (e.g. a CI-provisioned instance).
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "postgresql:///hockey_lines_test")
+
 
 @pytest.fixture
-def studio(tmp_path, monkeypatch):
-    from studio import db as db_module
+def studio(monkeypatch):
+    # Flat imports (not `from studio import db`) - studio/app.py imports its
+    # own siblings the same way (see its `import db`), and monkeypatching
+    # only takes effect on the exact module object app.py itself holds a
+    # reference to. `studio.db` and flat `db` are two independent module
+    # instances of the same file if both ever get imported - see
+    # conftest.py's comment.
+    import db as db_module
 
-    monkeypatch.setattr(db_module, "DB_PATH", tmp_path / "test_studio.db")
+    # db_module.DATABASE_URL must be patched (or a database_url passed
+    # explicitly) rather than relying on a bound default - see db.py's
+    # _resolve() docstring for why.
+    monkeypatch.setattr(db_module, "DATABASE_URL", TEST_DATABASE_URL)
+    db_module.apply_schema()
+    # Tests share one database rather than getting a fresh file each time
+    # (there's no SQLite-style "just point at a new path" here) - reset it
+    # to a clean slate, including sequences, so id assumptions stay stable
+    # across test runs.
+    with db_module.get_connection() as conn:
+        conn.execute("TRUNCATE TABLE workspaces, rosters, players, scenarios RESTART IDENTITY CASCADE")
 
-    import studio.app as app_module
+    import app as app_module
 
-    importlib.reload(app_module)  # re-run module-level db.init_db() against the patched path
+    importlib.reload(app_module)
     app_module.app.testing = True
+
+    # studio.app._call_solver normally makes an HTTP call to the solver
+    # service (solver/api.py), which runs as a separate deployment in
+    # production. These tests care about studio's own behavior - persistence,
+    # workspace scoping, request forwarding - not re-testing CP-SAT
+    # correctness (solver/tests already covers that against the live
+    # service), so this routes straight to api.py's real request handlers
+    # in-process instead of over the network.
+    import api as solver_api
+
+    def _fake_call_solver(path, body):
+        if path == "/solve":
+            req = solver_api.SolveRequest.model_validate(body)
+            return solver_api.solve_json(req).model_dump(), 200
+        if path == "/degrees-of-freedom":
+            req = solver_api.DofRequest.model_validate(body)
+            return solver_api.degrees_of_freedom(req), 200
+        if path == "/degrees-of-freedom/cancel":
+            req = solver_api.DofCancelRequest.model_validate(body)
+            return solver_api.degrees_of_freedom_cancel(req), 200
+        raise AssertionError(f"unexpected solver path in test fake: {path}")
+
+    monkeypatch.setattr(app_module, "_call_solver", _fake_call_solver)
     return app_module, db_module
 
 
@@ -84,6 +130,21 @@ def test_new_blank_roster_has_no_players(client, studio):
     resp = client.get(f"/w/{token}/studio/{roster_id}")
     assert resp.status_code == 200
     assert b"INITIAL_ROSTER = []" in resp.data
+
+
+def test_saving_an_empty_roster_clears_its_players(client, studio):
+    # Regression test: replace_players(roster_id, []) -> _insert_players
+    # with an empty list runs psycopg's executemany() with zero rows -
+    # verify that's a no-op, not an error, against the real Postgres driver.
+    _, db_module = studio
+    token, roster_id = _create_roster(client)
+    resp = _save_roster(client, token, roster_id, SMALL_PLAYERS)
+    assert resp.status_code == 200
+    assert len(db_module.list_players(roster_id)) == 3
+
+    resp = _save_roster(client, token, roster_id, [])
+    assert resp.status_code == 200
+    assert db_module.list_players(roster_id) == []
 
 
 def test_delete_roster_removes_it_and_its_players(client, studio):
@@ -351,7 +412,7 @@ def test_blocked_cookies_get_a_helpful_page_instead_of_a_new_workspace_every_tim
     assert resp.status_code == 200
     assert b"Cookies are blocked" in resp.data
 
-    with db_module.get_connection(db_module.DB_PATH) as conn:
+    with db_module.get_connection() as conn:
         count = conn.execute("SELECT COUNT(*) AS n FROM workspaces").fetchone()["n"]
     assert count == 0
 

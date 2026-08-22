@@ -1,7 +1,5 @@
-ortools>=9.0.0
-fastapi[standard]
-uvicorn[standard]
-python-multipart>=0.0.9
-pytest>=8.0.0
-httpx>=0.27.0
-flask>=3.0.0
+# Convenience union for local dev, so one venv can run both services and the
+# full test suite. Each service installs only its own slice when deployed:
+# see solver/requirements.txt (Render) and studio/requirements.txt (Vercel).
+-r solver/requirements.txt
+-r studio/requirements.txt

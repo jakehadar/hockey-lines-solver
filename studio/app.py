@@ -1,9 +1,11 @@
 """Studio: a Flask app for building rosters and running what-if scenarios
-against solver.py's CP-SAT solver.
+against the solver service (solver/api.py), a separate deployable that this
+app calls over HTTP - see _call_solver.
 
-Run locally:
+Run locally (two terminals):
+    cd solver && uvicorn api:app --reload           # solver service, :8000
     source ./venv/bin/activate
-    python -m studio.app          # dev server, http://127.0.0.1:5000
+    cd studio && python app.py                      # dev server, :5000
 """
 
 from __future__ import annotations
@@ -12,21 +14,30 @@ import argparse
 import csv
 import io
 import json
+import os
 import re
 import secrets
-import sqlite3
 from pathlib import Path
 from typing import Any
 
+import requests
 from flask import Flask, Response, abort, g, jsonify, redirect, render_template, request, url_for
 from pydantic import ValidationError
 
-import dof
-import solver
-from schemas import DEFAULT_OBJECTIVES, PlayerIn, ScenarioSave, ScenarioUpdate, SolveRequest
-from studio import db
+import db
+from local_schemas import DEFAULT_OBJECTIVES, PlayerIn, ScenarioSave, ScenarioUpdate
 
 _DEFAULT_OBJECTIVES_DUMP = [o.model_dump() for o in DEFAULT_OBJECTIVES]
+
+# The solver service (solver/api.py) - runs as its own deployment (Render),
+# separate from this app (Vercel), so studio never imports solver.py/dof.py
+# directly. Defaults to a local solver run with `uvicorn api:app` from
+# solver/, matching the two-terminal local dev setup described in README.
+SOLVER_API_URL = os.environ.get("SOLVER_API_URL", "http://127.0.0.1:8000").rstrip("/")
+# Generous on purpose: covers both a cold Render free-tier instance waking up
+# (up to ~30-50s) and a slow solve/DOF run on top of that, not just typical
+# latency.
+SOLVER_REQUEST_TIMEOUT = 120
 
 POSITIONS = ["LW", "C", "RW", "LD", "RD"]
 WORKSPACE_COOKIE = "workspace_token"
@@ -42,7 +53,13 @@ COOKIE_CHECK_COOKIE = "cookie_check"
 WORKSPACE_CREATE_LIMIT = 20
 WORKSPACE_CREATE_WINDOW_SECONDS = 60 * 60
 
-SAMPLE_ROSTER_CSV = Path(__file__).resolve().parent.parent / "rosters" / "sample_roster.csv"
+# Copied from rosters/sample_roster.csv, not read from there: on Vercel,
+# Root Directory scopes the deployed bundle to studio/ alone, and
+# rosters/sample_roster.csv sits outside it - a path reaching up to the
+# repo's rosters/ dir would 404 on first request in production. This copy is
+# static demo data (a handful of Simpsons characters), not something that
+# changes, so keeping the two in sync is a non-issue in practice.
+SAMPLE_ROSTER_CSV = Path(__file__).resolve().parent / "sample_roster.csv"
 SAMPLE_ROSTER_TITLE = "Sample Roster"
 
 app = Flask(__name__)
@@ -74,7 +91,7 @@ def _inject_workspace_token(endpoint: str, values: dict[str, Any]) -> None:
         values["token"] = g.workspace_token
 
 
-def _require_workspace() -> sqlite3.Row:
+def _require_workspace() -> dict[str, Any]:
     token = getattr(g, "workspace_token", None)
     workspace = db.get_workspace_by_token(token) if token else None
     if workspace is None:
@@ -83,11 +100,28 @@ def _require_workspace() -> sqlite3.Row:
 
 
 def _seed_sample_roster(workspace_id: int) -> None:
-    players = solver.read_roster(str(SAMPLE_ROSTER_CSV))
-    db.save_as_new_roster(workspace_id, SAMPLE_ROSTER_TITLE, db.player_records_from_players(players))
+    with open(SAMPLE_ROSTER_CSV, newline="", encoding="utf-8") as f:
+        records = db.player_records_from_csv_rows(csv.DictReader(f))
+    db.save_as_new_roster(workspace_id, SAMPLE_ROSTER_TITLE, records)
 
 
-def _row_to_player_in_dict(row: sqlite3.Row) -> dict[str, Any]:
+def _call_solver(path: str, body: dict) -> tuple[dict, int]:
+    """Forwards a request to the solver service and returns its (json body,
+    status code) verbatim - the solver is the sole authority on /solve and
+    /degrees-of-freedom request/response shape, so this deliberately does no
+    local validation beyond what each caller already checks. Network/decode
+    failures become a clean 502 instead of an unhandled 500."""
+    try:
+        resp = requests.post(f"{SOLVER_API_URL}{path}", json=body, timeout=SOLVER_REQUEST_TIMEOUT)
+    except requests.RequestException as e:
+        return {"error": f"Solver service unavailable: {e}"}, 502
+    try:
+        return resp.json(), resp.status_code
+    except ValueError:
+        return {"error": "Solver service returned a non-JSON response."}, 502
+
+
+def _row_to_player_in_dict(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": row["player_key"],
         "name": row["name"],
@@ -365,83 +399,39 @@ def studio_solve(roster_id: int):
     if db.get_roster(roster_id, workspace["id"]) is None:
         abort(404)
     body = request.get_json(silent=True) or {}
-    try:
-        req = SolveRequest.model_validate(body)
-    except ValidationError as e:
-        abort(400, description=str(e))
-    if not req.players:
+    if not body.get("players"):
         abort(400, description="players must not be empty.")
-    players = solver.players_from_player_in(req.players)
-    result = solver.solve_lines(
-        players, req.forwards, req.defense, req.time_limit,
-        allow_oop=req.allow_oop, allow_unwilling=req.allow_unwilling, objectives=req.objectives,
-    )
-    return jsonify(result.model_dump())
+    data, status = _call_solver("/solve", body)
+    return jsonify(data), status
 
 
 @app.post("/w/<token>/studio/<int:roster_id>/degrees-of-freedom")
 def studio_degrees_of_freedom(roster_id: int):
     """Prototype: how many other available players could substitute at each
     position without dropping the solve below its current best objective -
-    see dof.py for the full explanation. Expensive relative to /solve (many
-    re-solves), so the client fires this only after a solve lands, and
-    cancels/ignores it if a newer one supersedes it before this returns."""
+    see solver/dof.py for the full explanation. Expensive relative to
+    /solve (many re-solves), so the client fires this only after a solve
+    lands, and cancels/ignores it if a newer one supersedes it before this
+    returns."""
     workspace = _require_workspace()
     if db.get_roster(roster_id, workspace["id"]) is None:
         abort(404)
     body = request.get_json(silent=True) or {}
-    job_id = body.get("job_id")
-    try:
-        req = SolveRequest.model_validate(body)
-    except ValidationError as e:
-        abort(400, description=str(e))
-    if not req.players:
+    if not body.get("players"):
         abort(400, description="players must not be empty.")
-    players = solver.players_from_player_in(req.players)
-    cancel_event = dof.register_job(job_id) if job_id else None
-    try:
-        result = dof.compute_degrees_of_freedom(
-            players, req.forwards, req.defense, req.time_limit,
-            allow_oop=req.allow_oop, allow_unwilling=req.allow_unwilling, objectives=req.objectives,
-            cancel_event=cancel_event,
-        )
-    finally:
-        if job_id:
-            dof.unregister_job(job_id)
-    if result is None:
-        return jsonify({"status": "NO_SOLUTION"})
-    return jsonify(
-        {
-            "status": result.baseline.status,
-            "total_extra_options": result.total_extra_options,
-            "total_filled_slots": result.total_filled_slots,
-            "score_per_slot": result.score_per_slot,
-            "objectives": [o.model_dump() for o in result.objectives],
-            "by_position": [
-                {
-                    "position": pf.position,
-                    "slots_filled": pf.slots_filled,
-                    "extra_options": pf.extra_options,
-                    "candidates_checked": pf.candidates_checked,
-                }
-                for pf in result.by_position
-            ],
-        }
-    )
+    data, status = _call_solver("/degrees-of-freedom", body)
+    return jsonify(data), status
 
 
 @app.post("/w/<token>/studio/<int:roster_id>/degrees-of-freedom/cancel")
 def studio_degrees_of_freedom_cancel(roster_id: int):
-    """Best-effort: sets the cancel event for a job id if it's still
-    running, so /degrees-of-freedom stops launching further re-solves.
-    Idempotent - a job_id that's already finished or never existed is not
-    an error, just a no-op."""
+    """Best-effort: forwards the cancel to the solver service, which sets
+    the cancel event for this job id if it's still running. Idempotent - a
+    job_id that's already finished or never existed is not an error."""
     _require_workspace()
     body = request.get_json(silent=True) or {}
-    job_id = body.get("job_id")
-    if job_id:
-        dof.cancel_job(job_id)
-    return jsonify({"ok": True})
+    data, status = _call_solver("/degrees-of-freedom/cancel", body)
+    return jsonify(data), status
 
 
 @app.post("/w/<token>/studio/<int:roster_id>/save")
@@ -495,9 +485,9 @@ def scenarios_create(roster_id: int):
         req.defense,
         req.time_limit,
         json.dumps([p.model_dump() for p in req.players]),
-        req.result.model_dump_json(),
+        json.dumps(req.result),
         parent_scenario_id=req.parent_scenario_id,
-        dof_json=req.dof.model_dump_json() if req.dof else None,
+        dof_json=json.dumps(req.dof) if req.dof else None,
         allow_oop=req.allow_oop,
         allow_unwilling=req.allow_unwilling,
         objectives_json=json.dumps([o.model_dump() for o in req.objectives]),
@@ -526,8 +516,8 @@ def scenarios_update(roster_id: int, scenario_id: int):
         req.defense,
         req.time_limit,
         json.dumps([p.model_dump() for p in req.players]),
-        req.result.model_dump_json(),
-        dof_json=req.dof.model_dump_json() if req.dof else None,
+        json.dumps(req.result),
+        dof_json=json.dumps(req.dof) if req.dof else None,
         allow_oop=req.allow_oop,
         allow_unwilling=req.allow_unwilling,
         objectives_json=json.dumps([o.model_dump() for o in req.objectives]),
@@ -586,8 +576,6 @@ def scenarios_compare(roster_id: int):
     ]
     return render_template("compare.html", roster=roster, scenarios=compare_data)
 
-
-db.init_db()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
