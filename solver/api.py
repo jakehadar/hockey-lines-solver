@@ -15,7 +15,9 @@ from typing import Literal
 from fastapi import FastAPI, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 
+import dof
 import solver
 from schemas import SolveRequest, SolveResponse
 
@@ -94,7 +96,10 @@ def solve_json(
         raise HTTPException(status_code=400, detail="forwards and defense must be >= 0.")
 
     players = solver.players_from_player_in(request.players)
-    result = solver.solve_lines(players, request.forwards, request.defense, request.time_limit)
+    result = solver.solve_lines(
+        players, request.forwards, request.defense, request.time_limit,
+        allow_oop=request.allow_oop, allow_unwilling=request.allow_unwilling, objectives=request.objectives,
+    )
     return _respond(result, format)
 
 
@@ -105,7 +110,9 @@ def solve_json(
         "Accepts a roster CSV file upload (header: "
         "id,name,available,experience,preferred_positions,secondary_positions, "
         "plus optional unwilling_positions,optional_position_override,optional_player_link) "
-        "and returns the optimized line assignments."
+        "and returns the optimized line assignments. Unlike /solve, this endpoint has no "
+        "allow_oop/allow_unwilling/objectives form fields - it always solves with their "
+        "defaults (allow_oop=True, allow_unwilling=False, default objective priority)."
     ),
     response_model=SolveResponse,
     responses=CSV_RESPONSE_DOC,
@@ -133,3 +140,64 @@ async def solve_csv(
 
     result = solver.solve_lines(players, forwards, defense, time_limit)
     return _respond(result, format)
+
+
+class DofRequest(SolveRequest):
+    job_id: str | None = Field(None, description="Client-supplied id for this job, used to cancel it via POST /degrees-of-freedom/cancel while it's still running.")
+
+
+class DofCancelRequest(BaseModel):
+    job_id: str | None = Field(None, description="Id of a job previously submitted to /degrees-of-freedom. A missing, already-finished, or unknown id is a harmless no-op.")
+
+
+@app.post(
+    "/degrees-of-freedom",
+    summary="Compute a degrees-of-freedom analysis for a solved roster",
+    description=(
+        "Expensive relative to /solve (many re-solves, one per substitution candidate) - see dof.py "
+        "for the full explanation. Pass job_id to make the job cancellable via /degrees-of-freedom/cancel."
+    ),
+)
+def degrees_of_freedom(request: DofRequest) -> dict:
+    if not request.players:
+        raise HTTPException(status_code=400, detail="players must not be empty.")
+    players = solver.players_from_player_in(request.players)
+    cancel_event = dof.register_job(request.job_id) if request.job_id else None
+    try:
+        result = dof.compute_degrees_of_freedom(
+            players, request.forwards, request.defense, request.time_limit,
+            allow_oop=request.allow_oop, allow_unwilling=request.allow_unwilling, objectives=request.objectives,
+            cancel_event=cancel_event,
+        )
+    finally:
+        if request.job_id:
+            dof.unregister_job(request.job_id)
+    if result is None:
+        return {"status": "NO_SOLUTION"}
+    return {
+        "status": result.baseline.status,
+        "total_extra_options": result.total_extra_options,
+        "total_filled_slots": result.total_filled_slots,
+        "score_per_slot": result.score_per_slot,
+        "objectives": [o.model_dump() for o in result.objectives],
+        "by_position": [
+            {
+                "position": pf.position,
+                "slots_filled": pf.slots_filled,
+                "extra_options": pf.extra_options,
+                "candidates_checked": pf.candidates_checked,
+            }
+            for pf in result.by_position
+        ],
+    }
+
+
+@app.post(
+    "/degrees-of-freedom/cancel",
+    summary="Best-effort cancel a running degrees-of-freedom job",
+    description="Sets the cancel event for job_id if it's still running, so /degrees-of-freedom stops launching further re-solves. Idempotent.",
+)
+def degrees_of_freedom_cancel(request: DofCancelRequest) -> dict:
+    if request.job_id:
+        dof.cancel_job(request.job_id)
+    return {"ok": True}

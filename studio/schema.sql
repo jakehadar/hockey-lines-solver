@@ -1,7 +1,10 @@
 CREATE TABLE IF NOT EXISTS workspaces (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     token TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Stored as text (not TIMESTAMPTZ) in SQLite's datetime('now') format -
+    -- scenarios.html/rosters_list.html interpolate this straight into the
+    -- page, so keeping the same text shape avoids a display-format change.
+    created_at TEXT NOT NULL DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
     -- Client IP at creation time, kept only to throttle mass workspace
     -- creation (see studio/app.py's WORKSPACE_CREATE_LIMIT). Not used for
     -- anything else, and never shown to users.
@@ -11,16 +14,16 @@ CREATE TABLE IF NOT EXISTS workspaces (
 CREATE INDEX IF NOT EXISTS idx_workspaces_client_ip_created_at ON workspaces(client_ip, created_at);
 
 CREATE TABLE IF NOT EXISTS rosters (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
 );
 
 CREATE INDEX IF NOT EXISTS idx_rosters_workspace_id ON rosters(workspace_id);
 
 CREATE TABLE IF NOT EXISTS players (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     roster_id INTEGER NOT NULL REFERENCES rosters(id) ON DELETE CASCADE,
     player_key TEXT NOT NULL,
     name TEXT NOT NULL,
@@ -41,28 +44,24 @@ CREATE INDEX IF NOT EXISTS idx_players_roster_id ON players(roster_id);
 -- null parent; roster_id alone is enough to list a roster's scenarios, so
 -- there's no need for a special "baseline" scenario to anchor them to.
 CREATE TABLE IF NOT EXISTS scenarios (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     roster_id INTEGER NOT NULL REFERENCES rosters(id) ON DELETE CASCADE,
     parent_scenario_id INTEGER REFERENCES scenarios(id) ON DELETE SET NULL,
     title TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT NOT NULL DEFAULT to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
     forwards INTEGER NOT NULL,
     defense INTEGER NOT NULL,
     time_limit INTEGER NOT NULL,
     -- Whether a position neither preferred nor secondary (nor unwilling) for
     -- a player could be used to fill a slot at all - see solver.py's
-    -- allow_oop. Nullable so old rows (saved before this existed) fall back
-    -- to the historical behavior (1, i.e. true) rather than NULL/0.
+    -- allow_oop.
     allow_oop INTEGER NOT NULL DEFAULT 1,
     -- Whether optional_position_override may force a player onto a position
     -- they marked unwilling - see solver.py's allow_unwilling. Unlike
     -- allow_oop, this defaults to 0 (forbidden) for brand-new rows: unwilling
     -- is a stronger signal than an untagged position, so overriding it needs
-    -- explicit opt-in. (The migration path for pre-existing databases
-    -- backfills existing rows as 1 instead - see db.py's _migrate() - since
-    -- historically an override into an unwilling position was always
-    -- honored unconditionally, before this column existed to gate it.)
+    -- explicit opt-in.
     allow_unwilling INTEGER NOT NULL DEFAULT 0,
     -- Bumped only when solver.py's algorithm changes in a way that could
     -- change results for the same inputs; 0 until that first happens. Lets a

@@ -77,7 +77,7 @@ Run the dev server:
 ```bash
 source ./venv/bin/activate
 pip install -r requirements.txt
-uvicorn api:app --reload
+cd solver && uvicorn api:app --reload
 ```
 
 Interactive, auto-generated docs (try requests right in the browser):
@@ -178,18 +178,35 @@ relying on this in production.
 
 ## Studio: interactive scenario planning
 
-`studio/` is a Flask app for building and persisting rosters in SQLite and
-running interactive what-if scenarios against `solver.py` — a UI on top of
-the same solver core the CLI and `api.py` use (imported in-process, not over
-HTTP). It's an experimental first iteration; team/season/game-day concepts
-are intentionally out of scope.
+`studio/` is a Flask app for building and persisting rosters in Postgres and
+running interactive what-if scenarios against the solver service
+(`solver/api.py`) — a UI that calls the same solver core the CLI uses, but
+over HTTP rather than in-process, so the two can be deployed independently.
+It's an experimental first iteration; team/season/game-day concepts are
+intentionally out of scope.
 
-Run it:
+Needs a Postgres database - any local Postgres server works for dev (in
+production this is a Neon database, injected as `DATABASE_URL` by Vercel's
+Marketplace integration):
 
 ```bash
+createdb hockey_lines_dev
+export DATABASE_URL=postgresql:///hockey_lines_dev
+```
+
+Run it (two terminals):
+
+```bash
+# terminal 1 - the solver service
+source ./venv/bin/activate
+cd solver && uvicorn api:app --reload   # http://127.0.0.1:8000
+
+# terminal 2 - studio
 source ./venv/bin/activate
 pip install -r requirements.txt
-python -m studio.app          # http://127.0.0.1:5000, SQLite at studio/instance/studio.db
+cd studio
+python migrate.py             # one-time: creates DATABASE_URL's tables
+python app.py                 # http://127.0.0.1:5000
 ```
 
 No signup: visiting `/` mints an anonymous **workspace** — a token in a
@@ -205,7 +222,7 @@ it to someone else. New workspaces are pre-seeded with
 Optionally seed an additional roster from a CSV yourself:
 
 ```bash
-python -m studio.seed --csv rosters/sample_roster.csv --title "Sample Roster"
+python seed.py --csv ../rosters/sample_roster.csv --title "Sample Roster"    # from studio/
 # --token <existing-workspace-token> to seed into a workspace you already have,
 # instead of minting a new one
 ```
@@ -223,4 +240,4 @@ What it does:
 - **Alts** — "+ Add alt" creates a player flagged as not part of the core roster (`A##` id vs. the regular `P##`), pre-filled with all positions as preferred and experience 3 as a starting point. Alt-vs-full-time is fixed at creation; to change it, delete the row and add the other kind.
 - Deleting a roster deletes its scenarios too (warns first if there are any).
 
-Tests: `pytest tests/test_studio.py -v` (uses Flask's test client with an isolated temp SQLite DB per test).
+Tests: `pytest tests/test_studio.py -v` (uses Flask's test client against the "hockey_lines_test" Postgres database, truncated between tests - see `TEST_DATABASE_URL` in tests/test_studio.py).

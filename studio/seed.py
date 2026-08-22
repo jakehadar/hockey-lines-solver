@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Import an existing roster CSV into studio's SQLite DB as a named roster.
+"""Import an existing roster CSV into studio's database as a named roster.
 
-Usage:
-    python -m studio.seed --csv rosters/sample_roster.csv --title "Sample"
-    python -m studio.seed --csv rosters/sample_roster.csv --title "Sample" --token <existing-workspace-token>
+Usage (from studio/):
+    python seed.py --csv ../rosters/sample_roster.csv --title "Sample"
+    python seed.py --csv ../rosters/sample_roster.csv --title "Sample" --token <existing-workspace-token>
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import secrets
 
-import solver
-from studio import db
+import db
 
 
 def main() -> None:
@@ -22,7 +22,7 @@ def main() -> None:
     ap.add_argument("--token", help="Workspace token to seed into (default: create a new workspace)")
     args = ap.parse_args()
 
-    db.init_db()
+    db.apply_schema()
 
     if args.token:
         workspace = db.get_workspace_by_token(args.token)
@@ -33,10 +33,11 @@ def main() -> None:
         token = secrets.token_urlsafe(16)
         workspace_id = db.create_workspace(token)
 
-    players = solver.read_roster(args.csv)
-    roster_id = db.save_as_new_roster(workspace_id, args.title, db.player_records_from_players(players))
+    with open(args.csv, newline="", encoding="utf-8") as f:
+        records = db.player_records_from_csv_rows(csv.DictReader(f))
+    roster_id = db.save_as_new_roster(workspace_id, args.title, records)
 
-    print(f"Created roster {roster_id} ({args.title}) with {len(players)} players.")
+    print(f"Created roster {roster_id} ({args.title}) with {len(records)} players.")
     if not args.token:
         print(f"New workspace token: {token} (visit /w/{token}/rosters)")
 

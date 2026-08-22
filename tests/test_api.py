@@ -86,7 +86,96 @@ def test_solve_rejects_empty_roster():
     assert resp.status_code == 400
 
 
+def test_solve_json_forwards_allow_oop_and_allow_unwilling():
+    # Nobody prefers/lists RW as secondary, and exactly 3 players for 3
+    # slots - allow_oop=True (the default) must fill RW anyway (OOP);
+    # allow_oop=False for the identical roster must go infeasible instead.
+    # Regression test: solve_json used to silently drop allow_oop/
+    # allow_unwilling/objectives before calling solver.solve_lines().
+    players = [
+        {"id": "p1", "name": "A", "available": 1, "experience": 3, "preferred_positions": ["C"], "secondary_positions": []},
+        {"id": "p2", "name": "B", "available": 1, "experience": 3, "preferred_positions": ["C"], "secondary_positions": []},
+        {"id": "p3", "name": "C", "available": 1, "experience": 3, "preferred_positions": ["LW"], "secondary_positions": []},
+    ]
+    resp_allowed = client.post(
+        "/solve", json={"players": players, "forwards": 1, "defense": 0, "time_limit": 5, "allow_oop": True}
+    )
+    assert resp_allowed.json()["status"] in ("OPTIMAL", "FEASIBLE")
+
+    resp_forbidden = client.post(
+        "/solve", json={"players": players, "forwards": 1, "defense": 0, "time_limit": 5, "allow_oop": False}
+    )
+    assert resp_forbidden.json()["status"] == "NO_SOLUTION"
+
+    unwilling_players = [
+        {"id": "p1", "name": "A", "available": 1, "experience": 3, "preferred_positions": ["LW"], "secondary_positions": [], "unwilling_positions": ["C"], "optional_position_override": "C"},
+        {"id": "p2", "name": "B", "available": 1, "experience": 3, "preferred_positions": ["C"], "secondary_positions": []},
+        {"id": "p3", "name": "C", "available": 1, "experience": 3, "preferred_positions": ["RW"], "secondary_positions": []},
+    ]
+    resp_default = client.post(
+        "/solve", json={"players": unwilling_players, "forwards": 1, "defense": 0, "time_limit": 5}
+    )
+    assert resp_default.json()["status"] == "NO_SOLUTION"
+
+    resp_allowed_unwilling = client.post(
+        "/solve",
+        json={"players": unwilling_players, "forwards": 1, "defense": 0, "time_limit": 5, "allow_unwilling": True},
+    )
+    assert resp_allowed_unwilling.json()["status"] in ("OPTIMAL", "FEASIBLE")
+
+
 # No test for a CP-SAT "no solution" outcome: with this model, the number of
 # slots built is always <= the number of available players (see solve_lines'
 # allocation math in solver.py), so a feasible assignment always exists and
 # NO_SOLUTION is not practically reachable through the public API.
+
+
+def test_degrees_of_freedom_reports_zero_flexibility_for_an_exactly_sized_roster():
+    # 3 players, 1 forward line (3 slots) - every player is already needed
+    # just to fill the line, so there's no room for any substitution.
+    resp = client.post(
+        "/degrees-of-freedom",
+        json={"players": SMALL_PLAYERS[:3], "forwards": 1, "defense": 0, "time_limit": 5},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] in ("OPTIMAL", "FEASIBLE")
+    assert body["total_filled_slots"] == 3
+    assert body["total_extra_options"] == 0
+    assert body["score_per_slot"] == 0
+    assert {pf["position"] for pf in body["by_position"]} == {"LW", "C", "RW"}
+    assert all(pf["extra_options"] == 0 for pf in body["by_position"])
+
+
+def test_degrees_of_freedom_reports_no_solution_when_baseline_is_infeasible():
+    # Two players both locked to the same position, with only one slot for
+    # it - the baseline solve itself is infeasible, so there's nothing to score.
+    players = [
+        {"id": "p1", "name": "A", "available": 1, "experience": 3, "preferred_positions": ["LW"], "secondary_positions": [], "optional_position_override": "LW"},
+        {"id": "p2", "name": "B", "available": 1, "experience": 3, "preferred_positions": ["LW"], "secondary_positions": [], "optional_position_override": "LW"},
+    ]
+    resp = client.post(
+        "/degrees-of-freedom",
+        json={"players": players, "forwards": 1, "defense": 0, "time_limit": 5},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "NO_SOLUTION"}
+
+
+def test_degrees_of_freedom_cancel_is_a_harmless_noop_for_an_unknown_job():
+    resp = client.post("/degrees-of-freedom/cancel", json={"job_id": "not-a-real-job"})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+
+
+def test_degrees_of_freedom_cleans_up_its_job_registry_entry():
+    import dof as dof_module
+
+    resp = client.post(
+        "/degrees-of-freedom",
+        json={"players": SMALL_PLAYERS[:3], "forwards": 1, "defense": 0, "time_limit": 5, "job_id": "test-job-1"},
+    )
+    assert resp.status_code == 200
+    # The job must not linger in the registry after the request completes -
+    # otherwise a stale entry would grow unbounded over the app's uptime.
+    assert "test-job-1" not in dof_module._jobs
